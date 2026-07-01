@@ -89,7 +89,7 @@ app.get('/callback', async (req, res) => {
   }
 
   let currentUrl = new URL(
-    `${req.protocol}://${req.hostname}${req.originalUrl}`,
+    `${req.protocol}://${req.get('host')}${req.originalUrl}`,
   )
 
   let tokens = await client.authorizationCodeGrant(config, currentUrl, {
@@ -141,7 +141,7 @@ app.get('/logout', (req, res) => {
       id_token !== undefined
     ) {
       let logoutUrl = client.buildEndSessionUrl(config, {
-        post_logout_redirect_uri: `${req.protocol}://${req.hostname}`,
+        post_logout_redirect_uri: `${req.protocol}://${req.get('host')}`,
         id_token_hint: id_token,
       })
       res.redirect(logoutUrl.href)
