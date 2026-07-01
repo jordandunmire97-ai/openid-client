@@ -4,12 +4,12 @@ import * as client from 'openid-client'
 
 let server!: URL // Authorization server's Issuer Identifier URL
 let clientPrivateKey!: client.CryptoKey | client.PrivateKey
-let jwks!: client.JWKS
 /**
  * Authorization request callback URLs pre-registered at the Authorization
  * Server.
  */
 let redirect_uris!: string[]
+let jwks_uri!: string
 
 // End of prerequisites
 
@@ -21,7 +21,7 @@ let config = await client.dynamicClientRegistration(
     redirect_uris,
     response_types: ['code'],
     token_endpoint_auth_method: 'private_key_jwt',
-    jwks,
+    jwks_uri,
   },
   client.PrivateKeyJwt(clientPrivateKey),
 )

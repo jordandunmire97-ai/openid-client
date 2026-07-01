@@ -155,5 +155,8 @@ test('buildEndSessionUrl includes client_id and provided parameters', (t) => {
     id_token_hint: 'id-token-value',
   })
 
-  t.is(url.href, 'https://as.example.com/logout?post_logout_redirect_uri=https%3A%2F%2Frp.example.com%2Flogout%2Fcallback&id_token_hint=id-token-value&client_id=test-client-id')
+  t.is(
+    url.href,
+    'https://as.example.com/logout?post_logout_redirect_uri=https%3A%2F%2Frp.example.com%2Flogout%2Fcallback&id_token_hint=id-token-value&client_id=test-client-id',
+  )
 })
