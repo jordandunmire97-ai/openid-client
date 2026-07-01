@@ -44,6 +44,13 @@ Support from the community to continue maintaining and improving this module is 
 
 `openid-client` is distributed via [npmjs.com](https://www.npmjs.com/package/openid-client), [jsr.io](https://jsr.io/@panva/openid-client), and [github.com](https://github.com/panva/openid-client).
 
+## [Practical Guides](docs/guides/README.md)
+
+- [Web app login and logout](docs/guides/web-app-login.md)
+- [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md)
+- [Advanced configuration recipes](docs/guides/advanced-configuration.md)
+- [Runtime integration notes](docs/guides/runtime-notes.md)
+
 ## [Examples](examples/README.md)
 
 **`example`** ESM import[^cjs]
@@ -54,12 +61,35 @@ import * as client from 'openid-client'
 
 - Authorization Code Flow (OAuth 2.0) - [source](examples/oauth.ts)
 - Authorization Code Flow (OpenID Connect) - [source](examples/oidc.ts) | [diff](examples/oidc.diff)
+- Logout - [source](examples/logout.ts)
+- Additional Grants
+  - Client Credentials - [source](examples/client-credentials.ts)
+  - Device Authorization - [source](examples/device.ts)
+  - Client-Initiated Backchannel Authentication (CIBA) - [source](examples/ciba.ts)
+  - Token Management (refresh, introspection, revocation) - [source](examples/token-management.ts)
+- Dynamic Client Registration (DCR) - [source](examples/dcr.ts)
 - Extensions
   - DPoP - [source](examples/dpop.ts) | [diff](examples/dpop.diff)
   - JWT Secured Authorization Request (JAR) - [source](examples/jar.ts) | [diff](examples/jar.diff)
   - JWT Secured Authorization Response Mode (JARM) - [source](examples/jarm.ts) | [diff](examples/jarm.diff)
   - Pushed Authorization Request (PAR) - [source](examples/par.ts) | [diff](examples/par.diff)
 - Passport Strategy - [source](examples/passport.ts)
+
+## Feature map
+
+| Capability | Example | Guide | Tests |
+| --- | --- | --- | --- |
+| Authorization Code Flow (OAuth 2.0) | [oauth.ts](examples/oauth.ts) | [Web app login and logout](docs/guides/web-app-login.md) | [passport.test.ts](test/passport.test.ts) |
+| Authorization Code Flow (OpenID Connect) | [oidc.ts](examples/oidc.ts) | [Web app login and logout](docs/guides/web-app-login.md) | [passport.test.ts](test/passport.test.ts) |
+| RP-initiated logout | [logout.ts](examples/logout.ts) | [Web app login and logout](docs/guides/web-app-login.md) | [feature-scenarios.test.ts](test/feature-scenarios.test.ts) |
+| Client Credentials Grant | [client-credentials.ts](examples/client-credentials.ts) | [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md) | [dcr.test.ts](test/dcr.test.ts) |
+| Device Authorization Grant | [device.ts](examples/device.ts) | [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md) | [retry-after.test.ts](test/retry-after.test.ts) |
+| CIBA | [ciba.ts](examples/ciba.ts) | [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md) | [retry-after.test.ts](test/retry-after.test.ts) |
+| Refresh, introspection, revocation | [token-management.ts](examples/token-management.ts) | [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md) | [feature-scenarios.test.ts](test/feature-scenarios.test.ts) |
+| Dynamic Client Registration | [dcr.ts](examples/dcr.ts) | [Advanced configuration recipes](docs/guides/advanced-configuration.md) | [dcr.test.ts](test/dcr.test.ts) |
+| DPoP | [dpop.ts](examples/dpop.ts) | [Advanced configuration recipes](docs/guides/advanced-configuration.md) | [generic-grant.test.ts](test/generic-grant.test.ts) |
+| JAR / PAR / JARM | [jar.ts](examples/jar.ts), [par.ts](examples/par.ts), [jarm.ts](examples/jarm.ts) | [Advanced configuration recipes](docs/guides/advanced-configuration.md) | [passport.test.ts](test/passport.test.ts) |
+| Passport Strategy | [passport.ts](examples/passport.ts) | [Web app login and logout](docs/guides/web-app-login.md) | [passport.test.ts](test/passport.test.ts) |
 
 ## Quick start
 

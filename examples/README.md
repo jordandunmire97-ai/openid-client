@@ -18,11 +18,19 @@ A collection of examples for the most common use cases.
 
 - Authorization Code Flow (OAuth 2.0) - [source](oauth.ts)
 - Authorization Code Flow (OpenID Connect) - [source](oidc.ts) | [diff](oidc.diff)
+- Logout - [source](logout.ts)
+- Additional Grants
+  - Client Credentials - [source](client-credentials.ts)
+  - Device Authorization - [source](device.ts)
+  - Client-Initiated Backchannel Authentication (CIBA) - [source](ciba.ts)
+  - Token Management (refresh, introspection, revocation) - [source](token-management.ts)
+- Dynamic Client Registration (DCR) - [source](dcr.ts)
 - Extensions
   - DPoP - [source](dpop.ts) | [diff](dpop.diff)
   - JWT Secured Authorization Request (JAR) - [source](jar.ts) | [diff](jar.diff)
   - JWT Secured Authorization Response Mode (JARM) - [source](jarm.ts) | [diff](jarm.diff)
   - Pushed Authorization Request (PAR) - [source](par.ts) | [diff](par.diff)
 - Passport Strategy - [source](passport.ts)
+- Practical Guides - [source](../docs/guides/README.md)
 
 [sponsor-auth0]: https://a0.to/signup/panva
