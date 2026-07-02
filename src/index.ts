@@ -2803,14 +2803,20 @@ export function enableTelemetry(
       fetch(url, options as RequestInit))
 
   internals.fetch = async (url, options) => {
-    callbacks.onRequest?.(url, options)
-    const start = Date.now()
+    try {
+      callbacks.onRequest?.(url, options)
+    } catch {}
+    const start = performance.now()
     try {
       const response = await base(url, options)
-      callbacks.onResponse?.(url, options, response, Date.now() - start)
+      try {
+        callbacks.onResponse?.(url, options, response, performance.now() - start)
+      } catch {}
       return response
     } catch (err) {
-      callbacks.onError?.(url, options, err)
+      try {
+        callbacks.onError?.(url, options, err)
+      } catch {}
       throw err
     }
   }
