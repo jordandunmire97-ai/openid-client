@@ -459,6 +459,42 @@ test('pollBackchannelAuthenticationGrant - ignores invalid retry-after on author
   t.notThrows(() => agent.assertNoPendingInterceptors())
 })
 
+test('pollBackchannelAuthenticationGrant - aborts quickly while waiting on retry-after', async (t) => {
+  const { agent, mockAgent } = await setupMockAgent()
+  const controller = new AbortController()
+
+  mockAgent
+    .intercept({
+      method: 'POST',
+      path: '/token',
+    })
+    .reply(503, '503 Service Unavailable', {
+      headers: {
+        'retry-after': '10',
+      },
+    })
+
+  const config = createConfig(agent)
+  const response = {
+    auth_req_id: 'req-id',
+    expires_in: 600,
+    interval: 0,
+  }
+
+  const startTime = Date.now()
+  const abortTimer = setTimeout(() => controller.abort(), 100)
+  await t.throwsAsync(
+    client.pollBackchannelAuthenticationGrant(config, response, undefined, {
+      signal: controller.signal,
+    }),
+  )
+  clearTimeout(abortTimer)
+
+  const elapsed = Date.now() - startTime
+  t.true(elapsed < 2000, `expected quick abort, got ${elapsed}ms`)
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
 // Tests for Device Authorization Grant polling with retry-after
 
 test('pollDeviceAuthorizationGrant - respects retry-after header with numeric seconds', async (t) => {
