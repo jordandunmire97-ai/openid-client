@@ -42,6 +42,13 @@ config.timeout = 15
 config[client.customFetch] = (url, options) => fetch(url, options)
 ```
 
+For long-lived processes, prefer reusing a single `Configuration` instance and a
+single transport implementation so connection pooling and retry behavior stay
+warm across requests. In Node.js this usually means wiring
+`config[client.customFetch]` to an `undici` dispatcher or another fetch wrapper
+that already manages keep-alive, proxies, retries, or tracing for the whole
+application.
+
 ## Persist the JWKS cache between invocations
 
 This is primarily useful in runtimes where memory is not retained between
@@ -56,6 +63,25 @@ if (exported) {
   client.setJwksCache(config, exported)
 }
 ```
+
+If your deployment also re-discovers the authorization server frequently,
+combine persisted JWKS data with preloaded metadata or a reused
+`Configuration` instance so the hot path avoids repeated network round-trips.
+
+## Production performance checklist
+
+For the lowest request overhead in production:
+
+- Reuse the same `Configuration` instance whenever your runtime keeps memory
+  between requests.
+- Set `config.timeout` to match the latency budget of your application instead
+  of relying on the default for every deployment.
+- Route `config[client.customFetch]` through the same transport layer you use
+  elsewhere for pooling, proxies, retries, and observability.
+- Persist JWKS cache data in stateless environments so key lookups do not start
+  cold on every invocation.
+- Reuse DPoP key material when your deployment model allows it, rather than
+  generating a new key pair for each request.
 
 ## Enable encrypted responses
 
