@@ -110,10 +110,10 @@ export type ClientAuth = (
 ) => void
 
 /**
- * Returns a deferred ClientAuth that resolves `client_secret` from the
- * client metadata at call time (rather than at construction time). Each
- * invocation creates its own WeakMap cache so that different deferred auth
- * functions for the same client object cannot collide with one another.
+ * Returns a deferred ClientAuth that resolves `client_secret` from the client
+ * metadata at call time (rather than at construction time). Each invocation
+ * creates its own WeakMap cache so that different deferred auth functions for
+ * the same client object cannot collide with one another.
  */
 function deferredClientSecretAuth(
   factory: (secret: string) => ClientAuth,
@@ -1126,9 +1126,9 @@ function handleEntraId(
 }
 
 /**
- * Azure AD B2C uses a subdomain pattern (`*.b2clogin.com`) where the
- * discovered issuer may not match the provided server URL. This is a known
- * non-conformance that is silently accepted here to preserve interoperability.
+ * Azure AD B2C uses a subdomain pattern (`*.b2clogin.com`) where the discovered
+ * issuer may not match the provided server URL. This is a known non-conformance
+ * that is silently accepted here to preserve interoperability.
  */
 function handleB2Clogin(server: URL, options?: DiscoveryRequestOptions) {
   if (
@@ -2833,7 +2833,12 @@ export function enableTelemetry(
     try {
       const response = await base(url, options)
       try {
-        callbacks.onResponse?.(url, options, response, performance.now() - start)
+        callbacks.onResponse?.(
+          url,
+          options,
+          response,
+          performance.now() - start,
+        )
       } catch {}
       return response
     } catch (err) {
@@ -4521,6 +4526,7 @@ export interface TokenExchangeGrantParameters {
    * the `subject_token` parameter.
    *
    * Common values:
+   *
    * - `urn:ietf:params:oauth:token-type:access_token`
    * - `urn:ietf:params:oauth:token-type:refresh_token`
    * - `urn:ietf:params:oauth:token-type:id_token`
@@ -4554,6 +4560,7 @@ export interface TokenExchangeGrantParameters {
    * discretion of the authorization server.
    *
    * Common values:
+   *
    * - `urn:ietf:params:oauth:token-type:access_token`
    * - `urn:ietf:params:oauth:token-type:refresh_token`
    * - `urn:ietf:params:oauth:token-type:id_token`
@@ -4597,7 +4604,8 @@ export interface TokenExchangeGrantParameters {
  * {@link ServerMetadata.token_endpoint token endpoint} as defined by
  * {@link https://www.rfc-editor.org/rfc/rfc8693.html RFC 8693}. This grant
  * allows a client to exchange one security token for another, enabling use
- * cases such as delegation, impersonation, and cross-service token propagation.
+ * cases such as delegation, impersonation, and cross-service token
+ * propagation.
  *
  * > [!NOTE]\
  * > {@link ServerMetadata.token_endpoint URL of the authorization server's token endpoint}
@@ -4631,7 +4639,10 @@ export async function tokenExchangeGrant(
   parameters: TokenExchangeGrantParameters,
   options?: DPoPOptions,
 ): Promise<oauth.TokenEndpointResponse & TokenEndpointResponseHelpers> {
-  if (parameters.actor_token !== undefined && parameters.actor_token_type === undefined) {
+  if (
+    parameters.actor_token !== undefined &&
+    parameters.actor_token_type === undefined
+  ) {
     throw CodedTypeError(
       '"parameters.actor_token_type" is required when "parameters.actor_token" is present',
       ERR_INVALID_ARG_VALUE,
@@ -4784,6 +4795,190 @@ export async function fetchProtectedResource(
   }
 
   return result
+}
+
+/**
+ * Options for {@link fetchProtectedResourceWithAutoRefresh}
+ *
+ * @group Protected Resource Requests
+ * @group Token Management
+ */
+export interface FetchProtectedResourceAutoRefreshOptions extends DPoPOptions {
+  /**
+   * Additional parameters forwarded to the
+   * {@link ServerMetadata.token_endpoint token endpoint} when a Refresh Token
+   * Grant is performed. Typically used for parameters such as `scope` and
+   * `resource` ({@link !"Resource Indicators" Resource Indicator}).
+   */
+  refreshParameters?: URLSearchParams | Record<string, string>
+
+  /**
+   * Number of seconds before the access token expiry at which a proactive token
+   * refresh is attempted before making the protected resource request. Default
+   * is `30` seconds.
+   */
+  refreshThresholdSeconds?: number
+}
+
+/**
+ * Return value of {@link fetchProtectedResourceWithAutoRefresh}
+ *
+ * @group Protected Resource Requests
+ * @group Token Management
+ */
+export interface ProtectedResourceResponse {
+  /**
+   * The HTTP response from the protected resource endpoint.
+   */
+  response: Response
+
+  /**
+   * The current token set. If a Refresh Token Grant was performed, this is the
+   * newly issued token set; otherwise it is the same object that was passed in
+   * as `tokens`.
+   */
+  tokens: oauth.TokenEndpointResponse & TokenEndpointResponseHelpers
+}
+
+/**
+ * Performs an arbitrary Protected Resource request, automatically refreshing
+ * the access token when it is near expiry or when the resource server responds
+ * with HTTP 401 and a Refresh Token is available.
+ *
+ * Two refresh strategies are applied in order:
+ *
+ * 1. **Proactive refresh** — Before issuing the resource request, if the access
+ *    token expires within `refreshThresholdSeconds` (default: `30`) _and_ a
+ *    `refresh_token` is present in `tokens`, a Refresh Token Grant is performed
+ *    first.
+ * 2. **Reactive refresh** — If the resource server responds with HTTP `401` _and_
+ *    a `refresh_token` is present in the current token set, a Refresh Token
+ *    Grant is attempted and the request is retried with the new access token.
+ *    When the reactive refresh itself fails, the `401` response is returned to
+ *    the caller as-is.
+ *
+ * > [!NOTE]\
+ * > Always persist the `tokens` value returned by this function in your session
+ * > store. It will differ from the `tokens` argument whenever a refresh was
+ * > performed.
+ *
+ * > [!NOTE]\
+ * > When the `body` argument is a {@link !ReadableStream}, retrying the request
+ * > after a reactive refresh is not possible because the stream has already been
+ * > consumed. Pass the body as a `string`, {@link !URLSearchParams}, or
+ * > `Uint8Array` when reactive refresh is desired.
+ *
+ * > [!NOTE]\
+ * > {@link ServerMetadata.token_endpoint URL of the authorization server's token endpoint}
+ * > must be configured when a refresh is needed.
+ *
+ * @example
+ *
+ * ```ts
+ * let config!: client.Configuration
+ * let tokens!: client.TokenEndpointResponse &
+ *   client.TokenEndpointResponseHelpers
+ * let saveTokens!: (
+ *   t: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers,
+ * ) => void
+ *
+ * let { response, tokens: currentTokens } =
+ *   await client.fetchProtectedResourceWithAutoRefresh(
+ *     config,
+ *     tokens,
+ *     new URL('https://rs.example.com/api'),
+ *     'GET',
+ *   )
+ *
+ * // Always persist the returned tokens — they may have been refreshed
+ * saveTokens(currentTokens)
+ *
+ * console.log('Protected Resource Response', await response.json())
+ * ```
+ *
+ * @param tokens Current token set, typically the result of a previous
+ *   {@link authorizationCodeGrant} or {@link refreshTokenGrant} call.
+ * @param url URL to send the request to
+ * @param method HTTP Request method to use for the request
+ * @param body HTTP Request body to send in the request
+ * @param headers HTTP Request headers to add to the request
+ *
+ * @group Protected Resource Requests
+ * @group Token Management
+ */
+export async function fetchProtectedResourceWithAutoRefresh(
+  config: Configuration,
+  tokens: oauth.TokenEndpointResponse & TokenEndpointResponseHelpers,
+  url: URL,
+  method: string,
+  body?: FetchBody,
+  headers?: Headers,
+  options?: FetchProtectedResourceAutoRefreshOptions,
+): Promise<ProtectedResourceResponse> {
+  checkConfig(config)
+
+  const threshold = options?.refreshThresholdSeconds ?? 30
+
+  let currentTokens: oauth.TokenEndpointResponse &
+    TokenEndpointResponseHelpers = tokens
+
+  // Proactive refresh: refresh the access token before the request if it is
+  // expiring within the threshold window and a refresh token is available.
+  if (
+    currentTokens.refresh_token !== undefined &&
+    (currentTokens.expiresIn() ?? Infinity) <= threshold
+  ) {
+    currentTokens = await refreshTokenGrant(
+      config,
+      currentTokens.refresh_token,
+      options?.refreshParameters,
+      options,
+    )
+  }
+
+  let response = await fetchProtectedResource(
+    config,
+    currentTokens.access_token,
+    url,
+    method,
+    body,
+    headers,
+    options,
+  )
+
+  // Reactive refresh: if the resource server returns 401 and a refresh token
+  // is available, attempt a token refresh and retry the request once.
+  if (response.status === 401 && currentTokens.refresh_token !== undefined) {
+    let refreshed:
+      | (oauth.TokenEndpointResponse & TokenEndpointResponseHelpers)
+      | null = null
+    try {
+      refreshed = await refreshTokenGrant(
+        config,
+        currentTokens.refresh_token,
+        options?.refreshParameters,
+        options,
+      )
+    } catch {
+      // Refresh failed; return the original 401 response to the caller.
+    }
+
+    if (refreshed !== null) {
+      await response.body?.cancel()
+      response = await fetchProtectedResource(
+        config,
+        refreshed.access_token,
+        url,
+        method,
+        body,
+        headers,
+        options,
+      )
+      currentTokens = refreshed
+    }
+  }
+
+  return { response, tokens: currentTokens }
 }
 
 /**
