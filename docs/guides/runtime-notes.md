@@ -8,6 +8,9 @@ few deployment details matter.
 
 - Use the built-in `fetch`, `URL`, `Headers`, `crypto.subtle`, and
   `AbortSignal.timeout` support from supported Node.js releases.
+- Reuse `Configuration` instances and the underlying transport wiring whenever
+  your process model allows it so discovery results, connection pooling, and
+  other cached state stay hot.
 - Set `config.timeout` or `config[client.customFetch]` when you need custom
   transport behavior.
 - The [Passport Strategy](../../examples/passport.ts) is a good starting point
@@ -27,6 +30,8 @@ few deployment details matter.
   not retain memory between invocations.
 - Keep request handlers small and reconstruct `Configuration` from discovery or
   preloaded metadata on each invocation.
+- If discovery is too expensive for the hot path, preload server metadata and
+  restore JWKS cache data from your own storage between invocations.
 - Inject runtime-specific networking through `config[client.customFetch]` when
   platform defaults need to be wrapped.
 
