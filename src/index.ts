@@ -2720,6 +2720,103 @@ export function getJwksCache(
 }
 
 /**
+ * Telemetry event handlers passed to {@link enableTelemetry}.
+ *
+ * @group Advanced Configuration
+ */
+export interface TelemetryCallbacks {
+  /**
+   * Called immediately before each HTTP request is dispatched.
+   */
+  onRequest?: (url: string, options: Readonly<CustomFetchOptions>) => void
+
+  /**
+   * Called after each HTTP response is received. `durationMs` is the elapsed
+   * time in milliseconds from request dispatch to response receipt. Note that
+   * this is called for all HTTP responses including non-2xx ones — inspect
+   * `response.status` to distinguish error responses from successful ones.
+   */
+  onResponse?: (
+    url: string,
+    options: Readonly<CustomFetchOptions>,
+    response: Response,
+    durationMs: number,
+  ) => void
+
+  /**
+   * Called when a network-level error is thrown (e.g. DNS failure, connection
+   * reset, or AbortError). Not invoked for HTTP-level errors — those surface
+   * through {@link TelemetryCallbacks.onResponse} with a non-2xx status code.
+   */
+  onError?: (
+    url: string,
+    options: Readonly<CustomFetchOptions>,
+    error: unknown,
+  ) => void
+}
+
+/**
+ * Enables observability hooks that fire for every HTTP request the
+ * {@link Configuration} instance makes. This is useful for structured logging,
+ * latency monitoring, and distributed tracing — without needing to fully
+ * replace {@link customFetch}.
+ *
+ * > [!NOTE]\
+ * > When a {@link customFetch} is already set on the configuration, the telemetry
+ * > callbacks wrap it transparently. The underlying fetch behaviour is
+ * > unchanged.
+ *
+ * @example
+ *
+ * Structured request/response logging with latency
+ *
+ * ```ts
+ * let config!: client.Configuration
+ *
+ * client.enableTelemetry(config, {
+ *   onRequest(url, options) {
+ *     console.log(`→ ${options.method} ${url}`)
+ *   },
+ *   onResponse(url, options, response, durationMs) {
+ *     console.log(`← ${response.status} ${url} (${durationMs}ms)`)
+ *   },
+ *   onError(url, options, error) {
+ *     console.error(`✗ ${options.method} ${url}`, error)
+ *   },
+ * })
+ * ```
+ *
+ * @param callbacks Telemetry event handlers
+ *
+ * @group Advanced Configuration
+ */
+export function enableTelemetry(
+  config: Configuration,
+  callbacks: TelemetryCallbacks,
+): void {
+  checkConfig(config)
+
+  const internals = int(config)
+  const base: CustomFetch =
+    internals.fetch ??
+    ((url: string, options: CustomFetchOptions) =>
+      fetch(url, options as RequestInit))
+
+  internals.fetch = async (url, options) => {
+    callbacks.onRequest?.(url, options)
+    const start = Date.now()
+    try {
+      const response = await base(url, options)
+      callbacks.onResponse?.(url, options, response, Date.now() - start)
+      return response
+    } catch (err) {
+      callbacks.onError?.(url, options, err)
+      throw err
+    }
+  }
+}
+
+/**
  * Enables validating the JWS Signature of either a JWT {@link !Response.body} or
  * {@link TokenEndpointResponse.id_token} of a processed {@link !Response} such as
  * JWT UserInfo or JWT Introspection responses.
