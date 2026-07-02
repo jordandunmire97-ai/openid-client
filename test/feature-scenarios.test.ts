@@ -160,3 +160,80 @@ test('buildEndSessionUrl includes client_id and provided parameters', (t) => {
     'https://as.example.com/logout?post_logout_redirect_uri=https%3A%2F%2Frp.example.com%2Flogout%2Fcallback&id_token_hint=id-token-value&client_id=test-client-id',
   )
 })
+
+test('clientCredentialsGrant sends correct grant type and parameters', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockAgent = agent.get('https://as.example.com')
+  const config = createConfig(agent)
+
+  mockAgent
+    .intercept({
+      method: 'POST',
+      path: '/token',
+      body(body) {
+        const params = new URLSearchParams(body)
+        t.is(params.get('grant_type'), 'client_credentials')
+        t.is(params.get('scope'), 'read write')
+        t.is(params.get('resource'), 'urn:example:api')
+        return true
+      },
+    })
+    .reply(
+      200,
+      {
+        access_token: 'cc-access-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+      },
+      {
+        headers: {
+          'content-type': 'application/json',
+        },
+      },
+    )
+
+  const result = await client.clientCredentialsGrant(config, {
+    scope: 'read write',
+    resource: 'urn:example:api',
+  })
+
+  t.is(result.access_token, 'cc-access-token')
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('fetchProtectedResource sets Authorization header with access token', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockAgent = agent.get('https://rs.example.com')
+  const config = createConfig(agent)
+
+  mockAgent
+    .intercept({
+      method: 'GET',
+      path: '/api/resource',
+      headers(headers) {
+        return (
+          typeof headers['authorization'] === 'string' &&
+          headers['authorization'].toLowerCase().startsWith('bearer ')
+        )
+      },
+    })
+    .reply(
+      200,
+      { data: 'protected' },
+      { headers: { 'content-type': 'application/json' } },
+    )
+
+  const response = await client.fetchProtectedResource(
+    config,
+    'my-access-token',
+    new URL('https://rs.example.com/api/resource'),
+    'GET',
+  )
+
+  t.is(response.status, 200)
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
