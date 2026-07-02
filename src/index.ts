@@ -2154,21 +2154,44 @@ async function handleRetryAfter(
  */
 function wait(duration: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const waitStep = (remaining: number) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined
+
+    const cleanup = () => {
+      timeout && clearTimeout(timeout)
+      signal.removeEventListener('abort', onAbort)
+    }
+
+    const onAbort = () => {
+      cleanup()
       try {
         signal.throwIfAborted()
       } catch (err) {
         reject(err)
-        return
       }
+    }
 
+    signal.addEventListener('abort', onAbort, { once: true })
+
+    try {
+      signal.throwIfAborted()
+    } catch (err) {
+      cleanup()
+      reject(err)
+      return
+    }
+
+    const waitStep = (remaining: number) => {
       if (remaining <= 0) {
+        cleanup()
         resolve()
         return
       }
 
       const currentWait = Math.min(remaining, 5)
-      setTimeout(() => waitStep(remaining - currentWait), currentWait * 1000)
+      timeout = setTimeout(
+        () => waitStep(remaining - currentWait),
+        currentWait * 1000,
+      )
     }
 
     waitStep(duration)
