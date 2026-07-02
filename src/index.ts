@@ -41,6 +41,8 @@ interface Internal {
   decrypt?: oauth.JweDecryptFunction
   jwksCache: oauth.JWKSCacheInput
   implicit?: boolean
+  serverMetadataCache?: Readonly<ServerMetadata> & ServerMetadataHelpers
+  clientMetadataCache?: Readonly<oauth.OmitSymbolProperties<ClientMetadata>>
 }
 
 const int = (config: Configuration) => {
@@ -961,7 +963,7 @@ function errorHandler(err: unknown): never {
       case oauth.RESPONSE_IS_NOT_JSON:
         throw e('unexpected response content-type', err.cause, err.code)
       case oauth.PARSE_ERROR:
-        throw e('parsing error occured', err, err.code)
+        throw e('parsing error occurred', err, err.code)
       case oauth.INVALID_RESPONSE:
         throw e('invalid response encountered', err, err.code)
       case oauth.JWT_CLAIM_COMPARISON:
@@ -1935,16 +1937,26 @@ export class Configuration
    * @ignore
    */
   serverMetadata(): Readonly<ServerMetadata> & ServerMetadataHelpers {
-    const metadata = structuredClone(int(this).as)
-    addServerHelpers(metadata)
-    return metadata
+    const internals = int(this)
+    if (!internals.serverMetadataCache) {
+      const metadata = structuredClone(internals.as)
+      addServerHelpers(metadata)
+      Object.freeze(metadata)
+      internals.serverMetadataCache = metadata
+    }
+    return internals.serverMetadataCache
   }
   /**
    * @ignore
    */
   clientMetadata(): Readonly<oauth.OmitSymbolProperties<ClientMetadata>> {
-    const metadata = structuredClone(int(this).c)
-    return metadata
+    const internals = int(this)
+    if (!internals.clientMetadataCache) {
+      internals.clientMetadataCache = Object.freeze(
+        structuredClone(internals.c),
+      )
+    }
+    return internals.clientMetadataCache
   }
 
   /**
@@ -2009,9 +2021,7 @@ export interface TokenEndpointResponseHelpers {
 function getHelpers(response: oauth.TokenEndpointResponse) {
   let exp: number | undefined = undefined
   if (response.expires_in !== undefined) {
-    const now = new Date()
-    now.setSeconds(now.getSeconds() + response.expires_in)
-    exp = now.getTime()
+    exp = Date.now() + response.expires_in * 1000
   }
 
   return {
