@@ -4631,12 +4631,44 @@ export async function tokenExchangeGrant(
   parameters: TokenExchangeGrantParameters,
   options?: DPoPOptions,
 ): Promise<oauth.TokenEndpointResponse & TokenEndpointResponseHelpers> {
+  if (parameters.actor_token !== undefined && parameters.actor_token_type === undefined) {
+    throw CodedTypeError(
+      '"parameters.actor_token_type" is required when "parameters.actor_token" is present',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+
   const params = new URLSearchParams()
+  params.set('subject_token', parameters.subject_token)
+  params.set('subject_token_type', parameters.subject_token_type)
+  if (parameters.actor_token !== undefined)
+    params.set('actor_token', parameters.actor_token)
+  if (parameters.actor_token_type !== undefined)
+    params.set('actor_token_type', parameters.actor_token_type)
+  if (parameters.requested_token_type !== undefined)
+    params.set('requested_token_type', parameters.requested_token_type)
+  if (parameters.audience !== undefined)
+    params.set('audience', parameters.audience)
+  if (parameters.resource !== undefined)
+    params.set('resource', parameters.resource)
+  if (parameters.scope !== undefined) params.set('scope', parameters.scope)
+
+  const knownParams = new Set([
+    'subject_token',
+    'subject_token_type',
+    'actor_token',
+    'actor_token_type',
+    'requested_token_type',
+    'audience',
+    'resource',
+    'scope',
+  ])
   for (const [key, value] of Object.entries(parameters)) {
-    if (value !== undefined) {
+    if (!knownParams.has(key) && value !== undefined) {
       params.set(key, value)
     }
   }
+
   return genericGrantRequest(
     config,
     'urn:ietf:params:oauth:grant-type:token-exchange',

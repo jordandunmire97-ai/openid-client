@@ -185,3 +185,23 @@ test('tokenExchangeGrant omits undefined optional parameters', async (t) => {
   t.is(result.access_token, 'exchanged-token')
   t.notThrows(() => agent.assertNoPendingInterceptors())
 })
+
+test('tokenExchangeGrant throws when actor_token is provided without actor_token_type', async (t) => {
+  const agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const config = makeConfig(agent)
+
+  await t.throwsAsync(
+    client.tokenExchangeGrant(config, {
+      subject_token: 'subject-token',
+      subject_token_type: 'urn:ietf:params:oauth:token-type:access_token',
+      actor_token: 'actor-token',
+      // actor_token_type intentionally omitted
+    }),
+    {
+      instanceOf: TypeError,
+      message: /"parameters.actor_token_type" is required/,
+    },
+  )
+})
