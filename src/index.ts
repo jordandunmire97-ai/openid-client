@@ -4501,6 +4501,151 @@ export async function genericGrantRequest(
 }
 
 /**
+ * Parameters for the OAuth 2.0 Token Exchange Grant as defined by
+ * {@link https://www.rfc-editor.org/rfc/rfc8693.html RFC 8693}.
+ *
+ * `subject_token` and `subject_token_type` are required. All other parameters
+ * are optional and defined by the RFC.
+ */
+export interface TokenExchangeGrantParameters {
+  /**
+   * REQUIRED. A security token that represents the identity of the party on
+   * behalf of whom the request is being made.
+   *
+   * @see [RFC 8693 Section 2.1](https://www.rfc-editor.org/rfc/rfc8693.html#section-2.1)
+   */
+  subject_token: string
+
+  /**
+   * REQUIRED. An identifier that indicates the type of the security token in
+   * the `subject_token` parameter.
+   *
+   * Common values:
+   * - `urn:ietf:params:oauth:token-type:access_token`
+   * - `urn:ietf:params:oauth:token-type:refresh_token`
+   * - `urn:ietf:params:oauth:token-type:id_token`
+   * - `urn:ietf:params:oauth:token-type:jwt`
+   *
+   * @see [RFC 8693 Section 3](https://www.rfc-editor.org/rfc/rfc8693.html#section-3)
+   */
+  subject_token_type: string
+
+  /**
+   * OPTIONAL. A security token that represents the identity of the acting
+   * party. Typically, this will be the party that is authorized to use the
+   * requested security token and act on behalf of the subject.
+   *
+   * @see [RFC 8693 Section 2.1](https://www.rfc-editor.org/rfc/rfc8693.html#section-2.1)
+   */
+  actor_token?: string
+
+  /**
+   * OPTIONAL. An identifier that indicates the type of the security token in
+   * the `actor_token` parameter. This is REQUIRED when `actor_token` is
+   * present.
+   *
+   * @see [RFC 8693 Section 2.1](https://www.rfc-editor.org/rfc/rfc8693.html#section-2.1)
+   */
+  actor_token_type?: string
+
+  /**
+   * OPTIONAL. An identifier for the type of the requested security token. If
+   * the requested type is unspecified, the issued token type is at the
+   * discretion of the authorization server.
+   *
+   * Common values:
+   * - `urn:ietf:params:oauth:token-type:access_token`
+   * - `urn:ietf:params:oauth:token-type:refresh_token`
+   * - `urn:ietf:params:oauth:token-type:id_token`
+   * - `urn:ietf:params:oauth:token-type:jwt`
+   *
+   * @see [RFC 8693 Section 2.1](https://www.rfc-editor.org/rfc/rfc8693.html#section-2.1)
+   */
+  requested_token_type?: string
+
+  /**
+   * OPTIONAL. The logical name of the target service or resource where the
+   * client intends to use the requested security token.
+   *
+   * @see [RFC 8693 Section 2.1](https://www.rfc-editor.org/rfc/rfc8693.html#section-2.1)
+   */
+  audience?: string
+
+  /**
+   * OPTIONAL. A URI that indicates the target service or resource where the
+   * client intends to use the requested security token.
+   *
+   * @see [RFC 8707 - Resource Indicators for OAuth 2.0](https://www.rfc-editor.org/rfc/rfc8707.html)
+   */
+  resource?: string
+
+  /**
+   * OPTIONAL. The requested scope of access for the requested security token.
+   *
+   * @see [RFC 8693 Section 2.1](https://www.rfc-editor.org/rfc/rfc8693.html#section-2.1)
+   */
+  scope?: string
+
+  /**
+   * Any additional parameters to include in the token exchange request.
+   */
+  [parameter: string]: string | undefined
+}
+
+/**
+ * Performs an OAuth 2.0 Token Exchange Grant at the Authorization Server's
+ * {@link ServerMetadata.token_endpoint token endpoint} as defined by
+ * {@link https://www.rfc-editor.org/rfc/rfc8693.html RFC 8693}. This grant
+ * allows a client to exchange one security token for another, enabling use
+ * cases such as delegation, impersonation, and cross-service token propagation.
+ *
+ * > [!NOTE]\
+ * > {@link ServerMetadata.token_endpoint URL of the authorization server's token endpoint}
+ * > must be configured.
+ *
+ * @example
+ *
+ * Exchanging an Access Token for a new one scoped to a different audience
+ * (delegation scenario):
+ *
+ * ```ts
+ * let config!: client.Configuration
+ * let subjectToken!: string // Access Token to exchange
+ *
+ * let tokenEndpointResponse = await client.tokenExchangeGrant(config, {
+ *   subject_token: subjectToken,
+ *   subject_token_type: 'urn:ietf:params:oauth:token-type:access_token',
+ *   audience: 'https://target-service.example.com',
+ * })
+ * ```
+ *
+ * @param parameters RFC 8693 token exchange parameters. `subject_token` and
+ *   `subject_token_type` are required; all other fields are optional.
+ *
+ * @group Grants
+ *
+ * @see [RFC 8693 - OAuth 2.0 Token Exchange](https://www.rfc-editor.org/rfc/rfc8693.html)
+ */
+export async function tokenExchangeGrant(
+  config: Configuration,
+  parameters: TokenExchangeGrantParameters,
+  options?: DPoPOptions,
+): Promise<oauth.TokenEndpointResponse & TokenEndpointResponseHelpers> {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(parameters)) {
+    if (value !== undefined) {
+      params.set(key, value)
+    }
+  }
+  return genericGrantRequest(
+    config,
+    'urn:ietf:params:oauth:grant-type:token-exchange',
+    params,
+    options,
+  )
+}
+
+/**
  * Attempts revocation of an OAuth 2.0 token by making a request to the
  * {@link ServerMetadata.revocation_endpoint token revocation endpoint}. Whether
  * the token gets revoked, and the effect of that revocation is at the
