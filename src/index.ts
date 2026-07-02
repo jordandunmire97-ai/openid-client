@@ -109,7 +109,26 @@ export type ClientAuth = (
   headers: Headers,
 ) => void
 
-let tbi!: WeakMap<Internal['c'], ClientAuth>
+/**
+ * Returns a deferred ClientAuth that resolves `client_secret` from the
+ * client metadata at call time (rather than at construction time). Each
+ * invocation creates its own WeakMap cache so that different deferred auth
+ * functions for the same client object cannot collide with one another.
+ */
+function deferredClientSecretAuth(
+  factory: (secret: string) => ClientAuth,
+): ClientAuth {
+  const cache = new WeakMap<Internal['c'], ClientAuth>()
+  return (as, client, body, hdrs) => {
+    let auth: ClientAuth | undefined
+    if (!(auth = cache.get(client))) {
+      assertString(client.client_secret, '"metadata.client_secret"')
+      auth = factory(client.client_secret)
+      cache.set(client, auth)
+    }
+    return auth(as, client, body, hdrs)
+  }
+}
 
 /**
  * **`client_secret_post`** uses the HTTP request body to send `client_id` and
@@ -164,17 +183,7 @@ export function ClientSecretPost(clientSecret?: string): ClientAuth {
     return oauth.ClientSecretPost(clientSecret)
   }
 
-  tbi ||= new WeakMap()
-
-  return (as, client, body, headers) => {
-    let auth: ClientAuth | undefined
-    if (!(auth = tbi.get(client))) {
-      assertString(client.client_secret, '"metadata.client_secret"')
-      auth = oauth.ClientSecretPost(client.client_secret)
-      tbi.set(client, auth)
-    }
-    return auth(as, client, body, headers)
-  }
+  return deferredClientSecretAuth((secret) => oauth.ClientSecretPost(secret))
 }
 
 function assertString(input: unknown, it: string): asserts input is string {
@@ -240,17 +249,7 @@ export function ClientSecretBasic(clientSecret?: string): ClientAuth {
     return oauth.ClientSecretBasic(clientSecret)
   }
 
-  tbi ||= new WeakMap()
-
-  return (as, client, body, headers) => {
-    let auth: ClientAuth | undefined
-    if (!(auth = tbi.get(client))) {
-      assertString(client.client_secret, '"metadata.client_secret"')
-      auth = oauth.ClientSecretBasic(client.client_secret)
-      tbi.set(client, auth)
-    }
-    return auth(as, client, body, headers)
-  }
+  return deferredClientSecretAuth((secret) => oauth.ClientSecretBasic(secret))
 }
 
 /**
@@ -311,17 +310,9 @@ export function ClientSecretJwt(
     return oauth.ClientSecretJwt(clientSecret, options)
   }
 
-  tbi ||= new WeakMap()
-
-  return (as, client, body, headers) => {
-    let auth: ClientAuth | undefined
-    if (!(auth = tbi.get(client))) {
-      assertString(client.client_secret, '"metadata.client_secret"')
-      auth = oauth.ClientSecretJwt(client.client_secret, options)
-      tbi.set(client, auth)
-    }
-    return auth(as, client, body, headers)
-  }
+  return deferredClientSecretAuth((secret) =>
+    oauth.ClientSecretJwt(secret, options),
+  )
 }
 
 /**
@@ -1109,6 +1100,14 @@ export interface DiscoveryRequestOptions {
   timeout?: number
 }
 
+/**
+ * Microsoft Entra ID (formerly Azure AD) uses a multi-tenant issuer pattern
+ * where the discovered issuer contains `{tenantid}` as a placeholder, e.g.
+ * `https://login.microsoftonline.com/{tenantid}/v2.0`. This is a known
+ * non-conformance that is handled by deferring issuer validation to token
+ * processing time when the actual tenant ID is available in the ID Token `tid`
+ * claim.
+ */
 function handleEntraId(
   server: URL,
   as: oauth.AuthorizationServer,
@@ -1126,6 +1125,11 @@ function handleEntraId(
   return false
 }
 
+/**
+ * Azure AD B2C uses a subdomain pattern (`*.b2clogin.com`) where the
+ * discovered issuer may not match the provided server URL. This is a known
+ * non-conformance that is silently accepted here to preserve interoperability.
+ */
 function handleB2Clogin(server: URL, options?: DiscoveryRequestOptions) {
   if (
     server.hostname.endsWith('.b2clogin.com') &&
