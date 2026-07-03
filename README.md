@@ -253,7 +253,7 @@ Client Credentials flow is for obtaining Access Tokens to use with third party A
 let scope!: string // Scope of the access request
 let resource!: string // Resource Indicator of the Resource Server the access token is for
 
-let tokens: client.TokenEndpointResponse = await lib.clientCredentialsGrant(
+let tokens: client.TokenEndpointResponse = await client.clientCredentialsGrant(
   config,
   { scope, resource },
 )
