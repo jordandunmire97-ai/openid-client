@@ -853,6 +853,7 @@ export interface ServerMetadata extends oauth.AuthorizationServer {}
 
 const ERR_INVALID_ARG_VALUE = 'ERR_INVALID_ARG_VALUE'
 const ERR_INVALID_ARG_TYPE = 'ERR_INVALID_ARG_TYPE'
+const DIGITS_ONLY = /^\d+$/
 
 type codes = typeof ERR_INVALID_ARG_VALUE | typeof ERR_INVALID_ARG_TYPE
 
@@ -2124,7 +2125,7 @@ async function handleRetryAfter(
   if (retryAfter === undefined) return
 
   let delaySeconds: number | undefined
-  if (/^\d+$/.test(retryAfter)) {
+  if (DIGITS_ONLY.test(retryAfter)) {
     delaySeconds = parseInt(retryAfter, 10)
   } else {
     const retryDate = new Date(retryAfter)
@@ -4328,11 +4329,11 @@ export async function fetchUserInfo(
 }
 
 function retryable(err: unknown, options: DPoPOptions | undefined) {
-  if (options?.DPoP && options.flag !== retry) {
-    return oauth.isDPoPNonceError(err)
+  if (!options || !options.DPoP || options.flag === retry) {
+    return false
   }
 
-  return false
+  return oauth.isDPoPNonceError(err)
 }
 
 /**
@@ -4390,6 +4391,16 @@ export async function tokenIntrospection(
 }
 
 const retry: unique symbol = Symbol()
+const TOKEN_EXCHANGE_KNOWN_PARAMS = new Set([
+  'subject_token',
+  'subject_token_type',
+  'actor_token',
+  'actor_token_type',
+  'requested_token_type',
+  'audience',
+  'resource',
+  'scope',
+])
 export interface DPoPOptions {
   /**
    * DPoP handle to use for requesting a sender-constrained access token.
@@ -4664,18 +4675,8 @@ export async function tokenExchangeGrant(
     params.set('resource', parameters.resource)
   if (parameters.scope !== undefined) params.set('scope', parameters.scope)
 
-  const knownParams = new Set([
-    'subject_token',
-    'subject_token_type',
-    'actor_token',
-    'actor_token_type',
-    'requested_token_type',
-    'audience',
-    'resource',
-    'scope',
-  ])
   for (const [key, value] of Object.entries(parameters)) {
-    if (!knownParams.has(key) && value !== undefined) {
+    if (!TOKEN_EXCHANGE_KNOWN_PARAMS.has(key) && value !== undefined) {
       params.set(key, value)
     }
   }
