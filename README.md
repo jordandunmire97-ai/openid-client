@@ -1,4 +1,4 @@
-I# openid-client
+# openid-client
 
 > OAuth 2 / OpenID Connect Client API for JavaScript Runtimes
 
@@ -50,6 +50,8 @@ Support from the community to continue maintaining and improving this module is 
 - [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md)
 - [Advanced configuration recipes](docs/guides/advanced-configuration.md)
 - [Runtime integration notes](docs/guides/runtime-notes.md)
+- [Error handling and troubleshooting](docs/guides/error-handling.md)
+- [Security best practices](docs/guides/security-best-practices.md)
 
 ## [Examples](examples/README.md)
 

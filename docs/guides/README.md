@@ -9,3 +9,5 @@ task-oriented walkthroughs.
 - [Token lifecycle and protected resource access](token-lifecycle.md)
 - [Advanced configuration recipes](advanced-configuration.md)
 - [Runtime integration notes](runtime-notes.md)
+- [Error handling and troubleshooting](error-handling.md)
+- [Security best practices](security-best-practices.md)
