@@ -3686,7 +3686,11 @@ async function validateCodeIdTokenResponse(
     )
   }
 
-  if (expectedState !== undefined && typeof expectedState !== 'string') {
+  if (
+    expectedState !== undefined &&
+    expectedState !== skipStateCheck &&
+    typeof expectedState !== 'string'
+  ) {
     throw CodedTypeError(
       '"expectedState" must be a string',
       ERR_INVALID_ARG_TYPE,
