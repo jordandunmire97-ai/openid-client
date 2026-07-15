@@ -5,14 +5,16 @@ import * as jose from 'jose'
 test('hybrid response accepts skipStateCheck', async (t) => {
   const issuer = new URL('https://as.example.com')
   const keyPair = await client.randomDPoPKeyPair('ES256')
-  const idToken = await new jose.SignJWT()
+  const idToken = await new jose.SignJWT({
+    nonce: 'nonce',
+    c_hash: 'VpTQii5T_8rgwxA-Wtb2Bw',
+  })
     .setProtectedHeader({ alg: 'ES256' })
     .setIssuer(issuer.href)
     .setAudience('test-client-id')
     .setSubject('subject')
     .setIssuedAt()
     .setExpirationTime('1m')
-    .setNonce('nonce')
     .sign(keyPair.privateKey)
 
   const config = new client.Configuration(
@@ -37,7 +39,11 @@ test('hybrid response accepts skipStateCheck', async (t) => {
     }
 
     return new Response(
-      JSON.stringify({ access_token: 'access-token', token_type: 'bearer' }),
+      JSON.stringify({
+        access_token: 'access-token',
+        token_type: 'bearer',
+        id_token: idToken,
+      }),
       { headers: { 'content-type': 'application/json' } },
     )
   }
@@ -45,7 +51,7 @@ test('hybrid response accepts skipStateCheck', async (t) => {
   const result = await client.authorizationCodeGrant(
     config,
     new URL(
-      `https://rp.example.com/cb?code=code&id_token=${encodeURIComponent(idToken)}`,
+      `https://rp.example.com/cb#code=code&id_token=${encodeURIComponent(idToken)}`,
     ),
     { expectedNonce: 'nonce', expectedState: client.skipStateCheck },
   )
