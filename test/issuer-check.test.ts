@@ -28,6 +28,8 @@ test('issuer discovery matching', async (t) => {
             return { issuer: 'https://op.example.com/pathname' }
           case 3:
             return { issuer: 'https://op.example.com/pathname' }
+          case 4:
+            return { issuer: 'not a URL' }
         }
       },
       {
@@ -36,7 +38,7 @@ test('issuer discovery matching', async (t) => {
         },
       },
     )
-    .times(4)
+    .times(5)
 
   await t.notThrowsAsync(
     client.discovery(url, 'decoy', 'decoy', undefined, {
@@ -78,6 +80,20 @@ test('issuer discovery matching', async (t) => {
         },
       },
     ),
+  )
+
+  await t.throwsAsync(
+    client.discovery(url, 'decoy', 'decoy', undefined, {
+      // @ts-ignore
+      [client.customFetch](url, options) {
+        return undici.fetch(url, { ...options, dispatcher: agent })
+      },
+    }),
+    {
+      instanceOf: client.ClientError,
+      code: 'OAUTH_JSON_ATTRIBUTE_COMPARISON_FAILED',
+      message: 'discovered metadata issuer is not a valid URL',
+    },
   )
 
   t.notThrows(() => agent.assertNoPendingInterceptors())

@@ -1426,22 +1426,34 @@ async function performDiscovery(
     )
     .catch(errorHandler)
 
-  if (resolve && new URL(as.issuer).href !== server.href) {
-    handleEntraId(server, as, options) ||
-      handleB2Clogin(server, options) ||
-      (() => {
-        throw new ClientError(
-          'discovered metadata issuer does not match the expected issuer',
-          {
-            code: oauth.JSON_ATTRIBUTE_COMPARISON,
-            cause: {
-              expected: server.href,
-              body: as,
-              attribute: 'issuer',
+  if (resolve) {
+    let discoveredIssuer: URL
+    try {
+      discoveredIssuer = new URL(as.issuer)
+    } catch (cause) {
+      throw new ClientError('discovered metadata issuer is not a valid URL', {
+        code: oauth.JSON_ATTRIBUTE_COMPARISON,
+        cause,
+      })
+    }
+
+    if (discoveredIssuer.href !== server.href) {
+      handleEntraId(server, as, options) ||
+        handleB2Clogin(server, options) ||
+        (() => {
+          throw new ClientError(
+            'discovered metadata issuer does not match the expected issuer',
+            {
+              code: oauth.JSON_ATTRIBUTE_COMPARISON,
+              cause: {
+                expected: server.href,
+                body: as,
+                attribute: 'issuer',
+              },
             },
-          },
-        )
-      })()
+          )
+        })()
+    }
   }
 
   return as
@@ -3686,11 +3698,7 @@ async function validateCodeIdTokenResponse(
     )
   }
 
-  if (
-    expectedState !== undefined &&
-    expectedState !== skipStateCheck &&
-    typeof expectedState !== 'string'
-  ) {
+  if (expectedState !== undefined && typeof expectedState !== 'string') {
     throw CodedTypeError(
       '"expectedState" must be a string',
       ERR_INVALID_ARG_TYPE,
