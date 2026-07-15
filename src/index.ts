@@ -2423,7 +2423,10 @@ export async function pollDeviceAuthorizationGrant(
     .catch(errorHandler)
     .finally(requestSignal.cleanup)
 
-  if (response.status === 503 && response.headers.has('retry-after')) {
+  if (
+    (response.status === 429 || response.status === 503) &&
+    response.headers.has('retry-after')
+  ) {
     await handleRetryAfter(response, interval, pollingSignal, true)
     await response.body?.cancel()
     return retryPoll(interval)
@@ -2667,7 +2670,10 @@ export async function pollBackchannelAuthenticationGrant(
     .catch(errorHandler)
     .finally(requestSignal.cleanup)
 
-  if (response.status === 503 && response.headers.has('retry-after')) {
+  if (
+    (response.status === 429 || response.status === 503) &&
+    response.headers.has('retry-after')
+  ) {
     await handleRetryAfter(response, interval, pollingSignal, true)
     await response.body?.cancel()
     return retryPoll(interval)

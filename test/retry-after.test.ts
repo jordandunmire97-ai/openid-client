@@ -497,6 +497,41 @@ test('pollBackchannelAuthenticationGrant - aborts quickly while waiting on retry
 
 // Tests for Device Authorization Grant polling with retry-after
 
+test('pollBackchannelAuthenticationGrant - respects retry-after on 429 responses', async (t) => {
+  const { agent, mockAgent } = await setupMockAgent()
+
+  mockAgent
+    .intercept({
+      method: 'POST',
+      path: '/token',
+    })
+    .reply(429, 'Too Many Requests', {
+      headers: {
+        'retry-after': '0',
+      },
+    })
+
+  mockAgent
+    .intercept({
+      method: 'POST',
+      path: '/token',
+    })
+    .reply(200, {
+      access_token: 'access_token',
+      token_type: 'bearer',
+    })
+
+  const config = createConfig(agent)
+  const result = await client.pollBackchannelAuthenticationGrant(config, {
+    auth_req_id: 'req-id',
+    expires_in: 600,
+    interval: 0,
+  })
+
+  t.is(result.access_token, 'access_token')
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
 test('pollDeviceAuthorizationGrant - respects retry-after header with numeric seconds', async (t) => {
   const { agent, mockAgent } = await setupMockAgent()
 
@@ -547,6 +582,43 @@ test('pollDeviceAuthorizationGrant - respects retry-after header with numeric se
     elapsed >= 3000 && elapsed <= 4000,
     `expected ~3s wait, got ${elapsed}ms`,
   )
+  t.is(result.access_token, 'access_token')
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('pollDeviceAuthorizationGrant - respects retry-after on 429 responses', async (t) => {
+  const { agent, mockAgent } = await setupMockAgent()
+
+  mockAgent
+    .intercept({
+      method: 'POST',
+      path: '/token',
+    })
+    .reply(429, 'Too Many Requests', {
+      headers: {
+        'retry-after': '0',
+      },
+    })
+
+  mockAgent
+    .intercept({
+      method: 'POST',
+      path: '/token',
+    })
+    .reply(200, {
+      access_token: 'access_token',
+      token_type: 'bearer',
+    })
+
+  const config = createConfig(agent)
+  const result = await client.pollDeviceAuthorizationGrant(config, {
+    device_code: 'device123',
+    user_code: 'user123',
+    verification_uri: 'https://op.example.com/device',
+    expires_in: 600,
+    interval: 0,
+  })
+
   t.is(result.access_token, 'access_token')
   t.notThrows(() => agent.assertNoPendingInterceptors())
 })
