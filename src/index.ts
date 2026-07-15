@@ -1771,13 +1771,17 @@ function getServerHelpers(metadata: Readonly<ServerMetadata>) {
     supportsResponseType: {
       __proto__: null,
       value(responseType: string) {
-        return metadata.response_types_supported?.includes(responseType) === true
+        return (
+          metadata.response_types_supported?.includes(responseType) === true
+        )
       },
     },
     supportsResponseMode: {
       __proto__: null,
       value(responseMode: string) {
-        return metadata.response_modes_supported?.includes(responseMode) === true
+        return (
+          metadata.response_modes_supported?.includes(responseMode) === true
+        )
       },
     },
     supportsTokenEndpointAuthMethod: {
@@ -1803,8 +1807,9 @@ function getServerHelpers(metadata: Readonly<ServerMetadata>) {
       __proto__: null,
       value(algorithm: string) {
         return (
-          metadata.userinfo_signing_alg_values_supported?.includes(algorithm) ===
-          true
+          metadata.userinfo_signing_alg_values_supported?.includes(
+            algorithm,
+          ) === true
         )
       },
     },

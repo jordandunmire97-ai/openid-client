@@ -46,6 +46,19 @@ test('serverMetadata exposes capability helpers', (t) => {
   t.false(metadata.supportsAuthorizationSigningAlgorithm('ES256'))
   t.true(metadata.supportsUserInfoSigningAlgorithm('RS256'))
   t.false(metadata.supportsUserInfoSigningAlgorithm('ES256'))
+
+  const withoutCapabilities = new client.Configuration(
+    {
+      issuer: 'https://as.example.com',
+      token_endpoint: 'https://as.example.com/token',
+    },
+    'test-client-id',
+  )
+  t.false(
+    withoutCapabilities
+      .serverMetadata()
+      .supportsGrantType('authorization_code'),
+  )
 })
 
 test('refreshTokenGrant forwards additional parameters', async (t) => {
