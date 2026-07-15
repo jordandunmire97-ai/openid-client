@@ -10,6 +10,12 @@ function createConfig(agent: undici.MockAgent) {
       introspection_endpoint: 'https://as.example.com/introspect',
       revocation_endpoint: 'https://as.example.com/revoke',
       end_session_endpoint: 'https://as.example.com/logout',
+      grant_types_supported: ['authorization_code'],
+      response_types_supported: ['code'],
+      response_modes_supported: ['query'],
+      token_endpoint_auth_methods_supported: ['client_secret_basic'],
+      authorization_signing_alg_values_supported: ['RS256'],
+      userinfo_signing_alg_values_supported: ['RS256'],
     },
     'test-client-id',
     'test-client-secret',
@@ -22,6 +28,25 @@ function createConfig(agent: undici.MockAgent) {
 
   return config
 }
+
+test('serverMetadata exposes capability helpers', (t) => {
+  const agent = new undici.MockAgent()
+  const config = createConfig(agent)
+  const metadata = config.serverMetadata()
+
+  t.true(metadata.supportsGrantType('authorization_code'))
+  t.false(metadata.supportsGrantType('client_credentials'))
+  t.true(metadata.supportsResponseType('code'))
+  t.false(metadata.supportsResponseType('token'))
+  t.true(metadata.supportsResponseMode('query'))
+  t.false(metadata.supportsResponseMode('fragment'))
+  t.true(metadata.supportsTokenEndpointAuthMethod('client_secret_basic'))
+  t.false(metadata.supportsTokenEndpointAuthMethod('none'))
+  t.true(metadata.supportsAuthorizationSigningAlgorithm('RS256'))
+  t.false(metadata.supportsAuthorizationSigningAlgorithm('ES256'))
+  t.true(metadata.supportsUserInfoSigningAlgorithm('RS256'))
+  t.false(metadata.supportsUserInfoSigningAlgorithm('ES256'))
+})
 
 test('refreshTokenGrant forwards additional parameters', async (t) => {
   let agent = new undici.MockAgent()

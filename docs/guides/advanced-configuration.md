@@ -92,6 +92,28 @@ let decryptionKey!: client.CryptoKey | client.DecryptionKey
 client.enableDecryptingResponses(config, ['A256GCM'], decryptionKey)
 ```
 
+## Check server capabilities
+
+Use the helpers on `serverMetadata()` to select an interoperable flow before
+building a request. Each helper returns `false` when the corresponding metadata
+property is absent.
+
+```ts
+let metadata = config.serverMetadata()
+
+if (
+  metadata.supportsGrantType('authorization_code') &&
+  metadata.supportsResponseType('code') &&
+  metadata.supportsPKCE()
+) {
+  // Build an authorization code request.
+}
+```
+
+The same helpers are available for response modes, token endpoint client
+authentication methods, and authorization or UserInfo response signing
+algorithms.
+
 ## Turn on JARM or detached signature checks
 
 ```ts
