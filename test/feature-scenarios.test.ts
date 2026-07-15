@@ -68,6 +68,52 @@ test('refreshTokenGrant forwards additional parameters', async (t) => {
   t.notThrows(() => agent.assertNoPendingInterceptors())
 })
 
+test('fetchProtectedResourceWithAutoRefresh does not retry a stream body', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockRsAgent = agent.get('https://rs.example.com')
+  const config = createConfig(agent)
+  let requestCount = 0
+
+  mockRsAgent
+    .intercept({
+      method: 'POST',
+      path: '/api/resource',
+    })
+    .reply(401, () => {
+      requestCount++
+      return { error: 'expired_token' }
+    })
+
+  const tokens = {
+    access_token: 'expired-access-token',
+    refresh_token: 'refresh-token-value',
+    token_type: 'bearer',
+    expiresIn() {
+      return Infinity
+    },
+  } as client.TokenEndpointResponse & client.TokenEndpointResponseHelpers
+
+  const result = await client.fetchProtectedResourceWithAutoRefresh(
+    config,
+    tokens,
+    new URL('https://rs.example.com/api/resource'),
+    'POST',
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]))
+        controller.close()
+      },
+    }),
+  )
+
+  t.is(result.response.status, 401)
+  t.is(requestCount, 1)
+  t.is(result.tokens, tokens)
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
 test('tokenIntrospection forwards token type hint', async (t) => {
   let agent = new undici.MockAgent()
   agent.disableNetConnect()
