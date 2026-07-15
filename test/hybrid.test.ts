@@ -4,9 +4,10 @@ import * as jose from 'jose'
 
 test('hybrid response accepts skipStateCheck', async (t) => {
   const issuer = new URL('https://as.example.com')
-  const signingKeyPair = await client.randomDPoPKeyPair('ES256')
+  const testKeyPair = await client.randomDPoPKeyPair('ES256')
   const idToken = await new jose.SignJWT({
     nonce: 'nonce',
+    // base64url(SHA-256("code")[0..15]), as required by the ES256 c_hash check
     c_hash: 'VpTQii5T_8rgwxA-Wtb2Bw',
   })
     .setProtectedHeader({ alg: 'ES256' })
@@ -15,7 +16,7 @@ test('hybrid response accepts skipStateCheck', async (t) => {
     .setSubject('subject')
     .setIssuedAt()
     .setExpirationTime('1m')
-    .sign(signingKeyPair.privateKey)
+    .sign(testKeyPair.privateKey)
 
   const config = new client.Configuration(
     {
@@ -34,7 +35,7 @@ test('hybrid response accepts skipStateCheck', async (t) => {
     if (url.endsWith('/jwks')) {
       return new Response(
         JSON.stringify({
-          keys: [await jose.exportJWK(signingKeyPair.publicKey)],
+          keys: [await jose.exportJWK(testKeyPair.publicKey)],
         }),
         { headers: { 'content-type': 'application/json' } },
       )
