@@ -4841,6 +4841,15 @@ export interface ProtectedResourceResponse {
   tokens: oauth.TokenEndpointResponse & TokenEndpointResponseHelpers
 }
 
+function isReadableStream(body: FetchBody | undefined): body is ReadableStream {
+  return (
+    typeof body === 'object' &&
+    body !== null &&
+    'getReader' in body &&
+    typeof body.getReader === 'function'
+  )
+}
+
 /**
  * Performs an arbitrary Protected Resource request, automatically refreshing
  * the access token when it is near expiry or when the resource server responds
@@ -4949,7 +4958,11 @@ export async function fetchProtectedResourceWithAutoRefresh(
 
   // Reactive refresh: if the resource server returns 401 and a refresh token
   // is available, attempt a token refresh and retry the request once.
-  if (response.status === 401 && currentTokens.refresh_token !== undefined) {
+  if (
+    response.status === 401 &&
+    currentTokens.refresh_token !== undefined &&
+    !isReadableStream(body)
+  ) {
     let refreshed:
       | (oauth.TokenEndpointResponse & TokenEndpointResponseHelpers)
       | null = null
