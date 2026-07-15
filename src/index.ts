@@ -3710,14 +3710,14 @@ async function validateCodeIdTokenResponse(
   }
 
   const { as, c, fetch, tlsOnly, timeout, decrypt, jwksCache } = int(config)
-  const state =
+  const effectiveState =
     expectedState === skipStateCheck ? oauth.expectNoState : expectedState
 
   return (
     fapi
       ? oauth.validateDetachedSignatureResponse
       : oauth.validateCodeIdTokenResponse
-  )(as, c, authorizationResponse, expectedNonce, state, maxAge, {
+  )(as, c, authorizationResponse, expectedNonce, effectiveState, maxAge, {
     [oauth.customFetch]: fetch,
     [oauth.allowInsecureRequests]: !tlsOnly,
     headers: new Headers(headers),
