@@ -133,6 +133,40 @@ let redirectTo = await client.buildAuthorizationUrlWithPAR(
 )
 ```
 
+## Enable telemetry callbacks
+
+Use `enableTelemetry` to attach lightweight instrumentation to all HTTP
+requests and responses made by the library. This is useful for metrics,
+distributed tracing, or structured logging.
+
+```ts
+let config!: client.Configuration
+
+client.enableTelemetry(config, {
+  onRequest(url, options) {
+    console.log('outbound', options.method, url)
+  },
+  onResponse(url, options, resp, durationMs) {
+    console.log('inbound', resp.status, durationMs + 'ms')
+  },
+  onError(url, options, err) {
+    console.error('request failed', err)
+  },
+})
+```
+
+> **Security note:** The `onRequest` callback receives the full `options`
+> object, which may contain `Authorization` headers, DPoP proof tokens, client
+> secrets in `application/x-www-form-urlencoded` bodies, and other
+> credentials. Do **not** log the raw options or their headers without first
+> redacting sensitive fields. Treat callback options as potentially secret
+> material and never transmit them to third-party services without explicit
+> sanitisation.
+
+Calling `enableTelemetry` more than once on the same `Configuration` instance
+chains the callbacks with the previous registrations — each call adds another
+instrumentation layer that wraps the existing one.
+
 ## Related examples
 
 - [DPoP](../../examples/dpop.ts)

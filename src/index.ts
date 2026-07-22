@@ -2746,6 +2746,13 @@ export function getJwksCache(
 /**
  * Telemetry event handlers passed to {@link enableTelemetry}.
  *
+ * > [!WARNING]\
+ * > The `options` argument passed to each callback is the raw
+ * > {@link CustomFetchOptions} object forwarded to the underlying fetch
+ * > implementation. It may contain sensitive values such as `Authorization`,
+ * > `DPoP-Proof`, or other credential headers. Do **not** log the options object
+ * > as-is in production; extract only the fields you need.
+ *
  * @group Advanced Configuration
  */
 export interface TelemetryCallbacks {
@@ -4816,9 +4823,22 @@ export interface FetchProtectedResourceAutoRefreshOptions extends DPoPOptions {
   /**
    * Number of seconds before the access token expiry at which a proactive token
    * refresh is attempted before making the protected resource request. Default
-   * is `30` seconds.
+   * is `30` seconds. Must be a finite non-negative number.
    */
   refreshThresholdSeconds?: number
+
+  /**
+   * When `true`, non-idempotent HTTP methods (such as `POST` and `PATCH`) are
+   * eligible for retry after a reactive refresh, provided the request body is
+   * also replayable (i.e. not a {@link !ReadableStream}). Only enable this when
+   * the operation is guaranteed safe to repeat.
+   *
+   * By default only safe-and-idempotent methods (GET, HEAD, OPTIONS, TRACE) are
+   * retried.
+   *
+   * Default is `false`.
+   */
+  retryNonIdempotentRequests?: boolean
 }
 
 /**
@@ -4839,6 +4859,15 @@ export interface ProtectedResourceResponse {
    * as `tokens`.
    */
   tokens: oauth.TokenEndpointResponse & TokenEndpointResponseHelpers
+
+  /**
+   * Set when a reactive Refresh Token Grant was attempted after a `401`
+   * response from the resource server but the grant itself failed. In this case
+   * `response` is the original `401` and `tokens` is unchanged. Inspect this
+   * field to distinguish "the resource server refused with 401" from "the token
+   * refresh failed".
+   */
+  refreshError?: unknown
 }
 
 function isReadableStream(body: FetchBody | undefined): body is ReadableStream {
@@ -4848,6 +4877,65 @@ function isReadableStream(body: FetchBody | undefined): body is ReadableStream {
     'getReader' in body &&
     typeof body.getReader === 'function'
   )
+}
+
+// HTTP methods that are safe to replay by default after a reactive refresh
+// (RFC 7231 safe methods).  PUT and DELETE are idempotent but side-effectful;
+// POST and PATCH are neither — callers must opt-in via retryNonIdempotentRequests.
+const SAFE_REPLAY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE'])
+
+function isSafeReplayMethod(method: string): boolean {
+  return SAFE_REPLAY_METHODS.has(method.toUpperCase())
+}
+
+// Returns true when the 401 WWW-Authenticate challenge is for the Bearer (RFC
+// 6750) or DPoP (RFC 9449) scheme, indicating the access token itself is the
+// reason for rejection. Challenges for other schemes (Basic, Digest, …) and
+// Bearer/DPoP challenges with error "insufficient_scope" or "invalid_request"
+// are excluded because a refreshed token cannot fix them.
+function isBearerOrDPoPChallenge(response: Response): boolean {
+  const www = response.headers.get('www-authenticate')
+  if (!www) return false
+  if (!/(?:^|,)\s*(?:Bearer|DPoP)\b/i.test(www)) return false
+  const m = www.match(/\berror\s*=\s*"([^"]+)"/i)
+  if (m) {
+    const code = m[1].toLowerCase()
+    if (code === 'insufficient_scope' || code === 'invalid_request') {
+      return false
+    }
+  }
+  return true
+}
+
+// Per-Configuration in-flight refresh deduplication.  Entries are evicted when
+// the promise settles so this does not permanently cache tokens.
+const inflightRefreshes = new WeakMap<
+  Configuration,
+  Map<
+    string,
+    Promise<oauth.TokenEndpointResponse & TokenEndpointResponseHelpers>
+  >
+>()
+
+function deduplicateRefresh(
+  config: Configuration,
+  refreshToken: string,
+  create: () => Promise<
+    oauth.TokenEndpointResponse & TokenEndpointResponseHelpers
+  >,
+): Promise<oauth.TokenEndpointResponse & TokenEndpointResponseHelpers> {
+  let map = inflightRefreshes.get(config)
+  if (!map) {
+    map = new Map()
+    inflightRefreshes.set(config, map)
+  }
+  const existing = map.get(refreshToken)
+  if (existing) return existing
+  const promise = create().finally(() => {
+    map!.delete(refreshToken)
+  })
+  map.set(refreshToken, promise)
+  return promise
 }
 
 /**
@@ -4860,12 +4948,15 @@ function isReadableStream(body: FetchBody | undefined): body is ReadableStream {
  * 1. **Proactive refresh** — Before issuing the resource request, if the access
  *    token expires within `refreshThresholdSeconds` (default: `30`) _and_ a
  *    `refresh_token` is present in `tokens`, a Refresh Token Grant is performed
- *    first.
- * 2. **Reactive refresh** — If the resource server responds with HTTP `401` _and_
- *    a `refresh_token` is present in the current token set, a Refresh Token
- *    Grant is attempted and the request is retried with the new access token.
- *    When the reactive refresh itself fails, the `401` response is returned to
- *    the caller as-is.
+ *    first. Concurrent calls with the same refresh token are deduplicated —
+ *    only one token endpoint request is made regardless of how many callers
+ *    race.
+ * 2. **Reactive refresh** — If the resource server responds with HTTP `401` that
+ *    carries a `Bearer` or `DPoP` `WWW-Authenticate` challenge (RFC 6750 / RFC
+ *    9449) _and_ a `refresh_token` is present in the current token set, a
+ *    Refresh Token Grant is attempted and the request is retried once. When the
+ *    reactive refresh itself fails, the `401` response and the refresh error
+ *    are both surfaced in the return value via the `refreshError` field.
  *
  * > [!NOTE]\
  * > Always persist the `tokens` value returned by this function in your session
@@ -4877,6 +4968,16 @@ function isReadableStream(body: FetchBody | undefined): body is ReadableStream {
  * > after a reactive refresh is not possible because the stream has already been
  * > consumed. Pass the body as a `string`, {@link !URLSearchParams}, or
  * > `Uint8Array` when reactive refresh is desired.
+ *
+ * > [!NOTE]\
+ * > Reactive refresh is only attempted for safe-and-idempotent HTTP methods (GET,
+ * > HEAD, OPTIONS, TRACE) by default. To retry POST/PATCH or other non-idempotent
+ * > methods set `options.retryNonIdempotentRequests` to `true`, and only do so
+ * > when the body is replayable and the operation is safe to repeat.
+ *
+ * > [!NOTE]\
+ * > When the authorization server omits a new `refresh_token` from the grant
+ * > response, the existing refresh token is carried forward per RFC 6749 §6.
  *
  * > [!NOTE]\
  * > {@link ServerMetadata.token_endpoint URL of the authorization server's token endpoint}
@@ -4892,16 +4993,24 @@ function isReadableStream(body: FetchBody | undefined): body is ReadableStream {
  *   t: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers,
  * ) => void
  *
- * let { response, tokens: currentTokens } =
- *   await client.fetchProtectedResourceWithAutoRefresh(
- *     config,
- *     tokens,
- *     new URL('https://rs.example.com/api'),
- *     'GET',
- *   )
+ * let {
+ *   response,
+ *   tokens: currentTokens,
+ *   refreshError,
+ * } = await client.fetchProtectedResourceWithAutoRefresh(
+ *   config,
+ *   tokens,
+ *   new URL('https://rs.example.com/api'),
+ *   'GET',
+ * )
  *
  * // Always persist the returned tokens — they may have been refreshed
  * saveTokens(currentTokens)
+ *
+ * if (refreshError) {
+ *   // A reactive refresh was attempted but failed; currentTokens is unchanged.
+ *   console.error('Token refresh failed', refreshError)
+ * }
  *
  * console.log('Protected Resource Response', await response.json())
  * ```
@@ -4927,58 +5036,117 @@ export async function fetchProtectedResourceWithAutoRefresh(
 ): Promise<ProtectedResourceResponse> {
   checkConfig(config)
 
-  const threshold = options?.refreshThresholdSeconds ?? 30
+  const thresholdInput = options?.refreshThresholdSeconds
+  if (thresholdInput !== undefined) {
+    if (
+      typeof thresholdInput !== 'number' ||
+      !Number.isFinite(thresholdInput) ||
+      thresholdInput < 0
+    ) {
+      throw CodedTypeError(
+        '"options.refreshThresholdSeconds" must be a finite non-negative number',
+        ERR_INVALID_ARG_VALUE,
+      )
+    }
+  }
+  const threshold = thresholdInput ?? 30
 
   let currentTokens: oauth.TokenEndpointResponse &
     TokenEndpointResponseHelpers = tokens
 
   // Proactive refresh: refresh the access token before the request if it is
   // expiring within the threshold window and a refresh token is available.
+  // Concurrent calls sharing the same refresh token are deduplicated.
   if (
     currentTokens.refresh_token !== undefined &&
     (currentTokens.expiresIn() ?? Infinity) <= threshold
   ) {
-    currentTokens = await refreshTokenGrant(
-      config,
-      currentTokens.refresh_token,
-      options?.refreshParameters,
-      options,
+    const oldRefreshToken = currentTokens.refresh_token
+    currentTokens = await deduplicateRefresh(config, oldRefreshToken, () =>
+      refreshTokenGrant(
+        config,
+        oldRefreshToken,
+        options?.refreshParameters,
+        options,
+      ),
     )
+    // RFC 6749 §6: if the server does not issue a new refresh token, carry
+    // the existing one forward.
+    if (currentTokens.refresh_token === undefined) {
+      ;(currentTokens as { refresh_token?: string }).refresh_token =
+        oldRefreshToken
+    }
   }
 
-  let response = await fetchProtectedResource(
-    config,
-    currentTokens.access_token,
-    url,
-    method,
-    body,
-    headers,
-    options,
-  )
+  // First resource request.  When the server returns HTTP 401 with a
+  // WWW-Authenticate header, oauth4webapi throws WWWAuthenticateChallengeError
+  // rather than returning the response.  We catch that error here so that the
+  // Bearer or DPoP challenge path can attempt a reactive refresh.
+  let response: Response
+  let bearerOrDPoPChallengeCaught = false
+  try {
+    response = await fetchProtectedResource(
+      config,
+      currentTokens.access_token,
+      url,
+      method,
+      body,
+      headers,
+      options,
+    )
+  } catch (err) {
+    if (err instanceof oauth.WWWAuthenticateChallengeError) {
+      const challengeResponse = err.response as Response
+      if (isBearerOrDPoPChallenge(challengeResponse)) {
+        // Bearer or DPoP challenge — decide whether a reactive refresh can help.
+        response = challengeResponse
+        bearerOrDPoPChallengeCaught = true
+      } else {
+        // Non-token scheme (Basic, Digest, etc.) or a non-retriable error code
+        // (insufficient_scope, invalid_request) — re-throw so the caller can
+        // handle it.
+        throw err
+      }
+    } else {
+      throw err
+    }
+  }
 
-  // Reactive refresh: if the resource server returns 401 and a refresh token
-  // is available, attempt a token refresh and retry the request once.
+  // Reactive refresh: only attempted when the first request resulted in a
+  // Bearer or DPoP challenge, a refresh token is present, the body is
+  // replayable, and the method is allowed to be retried.
   if (
-    response.status === 401 &&
+    bearerOrDPoPChallengeCaught &&
     currentTokens.refresh_token !== undefined &&
-    !isReadableStream(body)
+    !isReadableStream(body) &&
+    (isSafeReplayMethod(method) || options?.retryNonIdempotentRequests === true)
   ) {
+    const oldRefreshToken = currentTokens.refresh_token
     let refreshed:
       | (oauth.TokenEndpointResponse & TokenEndpointResponseHelpers)
       | null = null
+    let refreshError: unknown
     try {
-      refreshed = await refreshTokenGrant(
-        config,
-        currentTokens.refresh_token,
-        options?.refreshParameters,
-        options,
+      refreshed = await deduplicateRefresh(config, oldRefreshToken, () =>
+        refreshTokenGrant(
+          config,
+          oldRefreshToken,
+          options?.refreshParameters,
+          options,
+        ),
       )
-    } catch {
-      // Refresh failed; return the original 401 response to the caller.
+    } catch (err) {
+      refreshError = err
     }
 
     if (refreshed !== null) {
-      await response.body?.cancel()
+      // RFC 6749 §6: carry forward the old refresh token when the server did
+      // not issue a new one.
+      if (refreshed.refresh_token === undefined) {
+        ;(refreshed as { refresh_token?: string }).refresh_token =
+          oldRefreshToken
+      }
+      // Second resource request — failures propagate to the caller.
       response = await fetchProtectedResource(
         config,
         refreshed.access_token,
@@ -4989,7 +5157,10 @@ export async function fetchProtectedResourceWithAutoRefresh(
         options,
       )
       currentTokens = refreshed
+      return { response, tokens: currentTokens }
     }
+
+    return { response, tokens: currentTokens, refreshError }
   }
 
   return { response, tokens: currentTokens }

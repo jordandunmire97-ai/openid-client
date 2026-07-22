@@ -36,8 +36,7 @@ test('tokenExchangeGrant sends required parameters and returns a token response'
       200,
       {
         access_token: 'exchanged-access-token',
-        issued_token_type:
-          'urn:ietf:params:oauth:token-type:access_token',
+        issued_token_type: 'urn:ietf:params:oauth:token-type:access_token',
         token_type: 'Bearer',
         expires_in: 3600,
       },
@@ -48,8 +47,7 @@ test('tokenExchangeGrant sends required parameters and returns a token response'
 
   const result = await client.tokenExchangeGrant(config, {
     subject_token: 'original-access-token',
-    subject_token_type:
-      'urn:ietf:params:oauth:token-type:access_token',
+    subject_token_type: 'urn:ietf:params:oauth:token-type:access_token',
   })
 
   t.is(result.access_token, 'exchanged-access-token')
@@ -69,8 +67,7 @@ test('tokenExchangeGrant accepts a response with n_a token_type', async (t) => {
       200,
       {
         access_token: 'exchanged-token',
-        issued_token_type:
-          'urn:ietf:params:oauth:token-type:access_token',
+        issued_token_type: 'urn:ietf:params:oauth:token-type:access_token',
         token_type: 'n_a',
       },
       { headers: { 'content-type': 'application/json' } },

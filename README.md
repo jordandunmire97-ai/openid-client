@@ -90,6 +90,8 @@ import * as client from 'openid-client'
 | Device Authorization Grant | [device.ts](examples/device.ts) | [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md) | [retry-after.test.ts](test/retry-after.test.ts) |
 | CIBA | [ciba.ts](examples/ciba.ts) | [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md) | [retry-after.test.ts](test/retry-after.test.ts) |
 | Refresh, introspection, revocation | [token-management.ts](examples/token-management.ts) | [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md) | [feature-scenarios.test.ts](test/feature-scenarios.test.ts) |
+| Auto-refresh around protected resource calls | | [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md) | [feature-scenarios.test.ts](test/feature-scenarios.test.ts) |
+| Telemetry callbacks | | [Advanced configuration recipes](docs/guides/advanced-configuration.md) | [feature-scenarios.test.ts](test/feature-scenarios.test.ts) |
 | Dynamic Client Registration | [dcr.ts](examples/dcr.ts) | [Advanced configuration recipes](docs/guides/advanced-configuration.md) | [dcr.test.ts](test/dcr.test.ts) |
 | DPoP | [dpop.ts](examples/dpop.ts) | [Advanced configuration recipes](docs/guides/advanced-configuration.md) | [generic-grant.test.ts](test/generic-grant.test.ts) |
 | JAR / PAR / JARM | [jar.ts](examples/jar.ts), [par.ts](examples/par.ts), [jarm.ts](examples/jarm.ts) | [Advanced configuration recipes](docs/guides/advanced-configuration.md) | [passport.test.ts](test/passport.test.ts) |
