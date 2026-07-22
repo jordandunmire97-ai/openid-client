@@ -81,10 +81,19 @@ test('fetchProtectedResourceWithAutoRefresh does not retry a stream body', async
       method: 'POST',
       path: '/api/resource',
     })
-    .reply(401, () => {
-      requestCount++
-      return { error: 'expired_token' }
-    })
+    .reply(
+      401,
+      () => {
+        requestCount++
+        return { error: 'expired_token' }
+      },
+      {
+        headers: {
+          'content-type': 'application/json',
+          'www-authenticate': 'Bearer error="invalid_token"',
+        },
+      },
+    )
 
   const tokens = {
     access_token: 'expired-access-token',
@@ -249,7 +258,7 @@ test('clientCredentialsGrant sends correct grant type and parameters', async (t)
   t.notThrows(() => agent.assertNoPendingInterceptors())
 })
 
-test('fetchProtectedResource sets Authorization header with access token', async (t) => {
+test('fetchProtectedResource sets Authorization header with exact ****** token value', async (t) => {
   let agent = new undici.MockAgent()
   agent.disableNetConnect()
 
@@ -261,10 +270,7 @@ test('fetchProtectedResource sets Authorization header with access token', async
       method: 'GET',
       path: '/api/resource',
       headers(headers) {
-        return (
-          typeof headers['authorization'] === 'string' &&
-          headers['authorization'].toLowerCase().startsWith('bearer ')
-        )
+        return headers['authorization'] === 'Bearer my-access-token'
       },
     })
     .reply(
@@ -312,10 +318,8 @@ test('fetchProtectedResourceWithAutoRefresh - no refresh when token has sufficie
       method: 'GET',
       path: '/api/resource',
       headers(headers) {
-        return (
-          typeof headers['authorization'] === 'string' &&
-          headers['authorization'].toLowerCase().startsWith('bearer ')
-        )
+        // Exact token value check
+        return headers['authorization'] === 'Bearer initial-access-token'
       },
     })
     .reply(
@@ -384,16 +388,13 @@ test('fetchProtectedResourceWithAutoRefresh - proactive refresh when token is ne
       { headers: { 'content-type': 'application/json' } },
     )
 
-  // Resource request must use the refreshed token
+  // Resource request must use the refreshed token (exact value check)
   mockRsAgent
     .intercept({
       method: 'GET',
       path: '/api/resource',
       headers(headers) {
-        return (
-          typeof headers['authorization'] === 'string' &&
-          headers['authorization'].toLowerCase().startsWith('bearer ')
-        )
+        return headers['authorization'] === 'Bearer refreshed-access-token'
       },
     })
     .reply(
@@ -416,7 +417,7 @@ test('fetchProtectedResourceWithAutoRefresh - proactive refresh when token is ne
   t.notThrows(() => agent.assertNoPendingInterceptors())
 })
 
-test('fetchProtectedResourceWithAutoRefresh - reactive refresh on 401', async (t) => {
+test('fetchProtectedResourceWithAutoRefresh - reactive refresh on 401 with ****** WWW-Authenticate challenge', async (t) => {
   let agent = new undici.MockAgent()
   agent.disableNetConnect()
 
@@ -438,19 +439,21 @@ test('fetchProtectedResourceWithAutoRefresh - reactive refresh on 401', async (t
 
   const tokens = await client.refreshTokenGrant(config, 'seed-refresh-token')
 
-  // First resource request returns 401
+  // First resource request returns 401 with ****** (semantic token expiry)
   mockRsAgent
     .intercept({
       method: 'GET',
       path: '/api/resource',
       headers(headers) {
-        return (
-          typeof headers['authorization'] === 'string' &&
-          headers['authorization'].toLowerCase().startsWith('bearer ')
-        )
+        return headers['authorization'] === 'Bearer stale-access-token'
       },
     })
-    .reply(401, '', { headers: { 'content-type': 'application/json' } })
+    .reply(401, '', {
+      headers: {
+        'content-type': 'application/json',
+        'www-authenticate': 'Bearer error="invalid_token"',
+      },
+    })
 
   // Reactive refresh call
   mockTokenAgent
@@ -476,16 +479,13 @@ test('fetchProtectedResourceWithAutoRefresh - reactive refresh on 401', async (t
       { headers: { 'content-type': 'application/json' } },
     )
 
-  // Retry resource request with new token
+  // Retry resource request with new token (exact value check)
   mockRsAgent
     .intercept({
       method: 'GET',
       path: '/api/resource',
       headers(headers) {
-        return (
-          typeof headers['authorization'] === 'string' &&
-          headers['authorization'].toLowerCase().startsWith('bearer ')
-        )
+        return headers['authorization'] === 'Bearer new-access-token'
       },
     })
     .reply(
@@ -505,10 +505,11 @@ test('fetchProtectedResourceWithAutoRefresh - reactive refresh on 401', async (t
   t.is(response.status, 200)
   t.is(returnedTokens.access_token, 'new-access-token')
   t.is(returnedTokens.refresh_token, 'new-refresh-token')
+  t.is(returnedTokens.refreshError, undefined)
   t.notThrows(() => agent.assertNoPendingInterceptors())
 })
 
-test('fetchProtectedResourceWithAutoRefresh - returns 401 when reactive refresh fails', async (t) => {
+test('fetchProtectedResourceWithAutoRefresh - exposes refresh error and returns 401 when reactive refresh fails', async (t) => {
   let agent = new undici.MockAgent()
   agent.disableNetConnect()
 
@@ -530,10 +531,15 @@ test('fetchProtectedResourceWithAutoRefresh - returns 401 when reactive refresh 
 
   const tokens = await client.refreshTokenGrant(config, 'seed-refresh-token')
 
-  // Resource request returns 401
+  // Resource request returns 401 with ******
   mockRsAgent
     .intercept({ method: 'GET', path: '/api/resource' })
-    .reply(401, '', { headers: { 'content-type': 'application/json' } })
+    .reply(401, '', {
+      headers: {
+        'content-type': 'application/json',
+        'www-authenticate': 'Bearer error="invalid_token"',
+      },
+    })
 
   // Reactive refresh fails with invalid_grant
   mockTokenAgent
@@ -544,17 +550,762 @@ test('fetchProtectedResourceWithAutoRefresh - returns 401 when reactive refresh 
       { headers: { 'content-type': 'application/json' } },
     )
 
-  const { response, tokens: returnedTokens } =
-    await client.fetchProtectedResourceWithAutoRefresh(
+  const result = await client.fetchProtectedResourceWithAutoRefresh(
+    config,
+    tokens,
+    new URL('https://rs.example.com/api/resource'),
+    'GET',
+  )
+
+  // The original 401 is returned when refresh fails
+  t.is(result.response.status, 401)
+  // Token set is unchanged since refresh failed
+  t.is(result.tokens, tokens)
+  // The refresh error is exposed, not swallowed
+  t.truthy(result.refreshError)
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('fetchProtectedResourceWithAutoRefresh - no reactive refresh when 401 has no WWW-Authenticate', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockTokenAgent = agent.get('https://as.example.com')
+  const mockRsAgent = agent.get('https://rs.example.com')
+  const config = createConfig(agent)
+
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'access-token',
+      refresh_token: 'refresh-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  const tokens = await client.refreshTokenGrant(config, 'seed-refresh-token')
+
+  // 401 with no WWW-Authenticate header — not a semantic token challenge
+  mockRsAgent
+    .intercept({ method: 'GET', path: '/api/resource' })
+    .reply(401, '', { headers: { 'content-type': 'application/json' } })
+
+  const result = await client.fetchProtectedResourceWithAutoRefresh(
+    config,
+    tokens,
+    new URL('https://rs.example.com/api/resource'),
+    'GET',
+  )
+
+  t.is(result.response.status, 401)
+  t.is(result.tokens, tokens)
+  // No refresh error because no refresh was attempted
+  t.is(result.refreshError, undefined)
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('fetchProtectedResourceWithAutoRefresh - no reactive refresh when 401 has non-****** challenge', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockTokenAgent = agent.get('https://as.example.com')
+  const mockRsAgent = agent.get('https://rs.example.com')
+  const config = createConfig(agent)
+
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'access-token',
+      refresh_token: 'refresh-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  const tokens = await client.refreshTokenGrant(config, 'seed-refresh-token')
+
+  // 401 with Basic auth challenge — unrelated to token expiry
+  mockRsAgent
+    .intercept({ method: 'GET', path: '/api/resource' })
+    .reply(401, '', {
+      headers: {
+        'content-type': 'application/json',
+        'www-authenticate': 'Basic realm="example"',
+      },
+    })
+
+  await t.throwsAsync(
+    client.fetchProtectedResourceWithAutoRefresh(
       config,
       tokens,
       new URL('https://rs.example.com/api/resource'),
       'GET',
+    ),
+    { instanceOf: client.WWWAuthenticateChallengeError },
+  )
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('fetchProtectedResourceWithAutoRefresh - no reactive refresh when 401 error is insufficient_scope', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockTokenAgent = agent.get('https://as.example.com')
+  const mockRsAgent = agent.get('https://rs.example.com')
+  const config = createConfig(agent)
+
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'access-token',
+      refresh_token: 'refresh-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  const tokens = await client.refreshTokenGrant(config, 'seed-refresh-token')
+
+  // 401 with ****** — a refresh with same scope won't help
+  mockRsAgent
+    .intercept({ method: 'GET', path: '/api/resource' })
+    .reply(401, '', {
+      headers: {
+        'content-type': 'application/json',
+        'www-authenticate': 'Bearer error="insufficient_scope"',
+      },
+    })
+
+  await t.throwsAsync(
+    client.fetchProtectedResourceWithAutoRefresh(
+      config,
+      tokens,
+      new URL('https://rs.example.com/api/resource'),
+      'GET',
+    ),
+    { instanceOf: client.WWWAuthenticateChallengeError },
+  )
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('fetchProtectedResourceWithAutoRefresh - POST not retried by default on 401', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockTokenAgent = agent.get('https://as.example.com')
+  const mockRsAgent = agent.get('https://rs.example.com')
+  const config = createConfig(agent)
+  let requestCount = 0
+
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'access-token',
+      refresh_token: 'refresh-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  const tokens = await client.refreshTokenGrant(config, 'seed-refresh-token')
+
+  mockRsAgent.intercept({ method: 'POST', path: '/api/action' }).reply(
+    401,
+    () => {
+      requestCount++
+      return ''
+    },
+    {
+      headers: {
+        'content-type': 'application/json',
+        'www-authenticate': 'Bearer error="invalid_token"',
+      },
+    },
+  )
+
+  const result = await client.fetchProtectedResourceWithAutoRefresh(
+    config,
+    tokens,
+    new URL('https://rs.example.com/api/action'),
+    'POST',
+    'body-text',
+  )
+
+  t.is(result.response.status, 401)
+  t.is(requestCount, 1, 'POST must not be retried without explicit opt-in')
+  t.is(result.tokens, tokens)
+  t.is(result.refreshError, undefined)
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('fetchProtectedResourceWithAutoRefresh - POST retried when retryNonIdempotentRequests is true', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockTokenAgent = agent.get('https://as.example.com')
+  const mockRsAgent = agent.get('https://rs.example.com')
+  const config = createConfig(agent)
+
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'stale-token',
+      refresh_token: 'refresh-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  const tokens = await client.refreshTokenGrant(config, 'seed-refresh-token')
+
+  mockRsAgent
+    .intercept({
+      method: 'POST',
+      path: '/api/action',
+      headers(h) {
+        return h['authorization'] === 'Bearer stale-token'
+      },
+    })
+    .reply(401, '', {
+      headers: {
+        'content-type': 'application/json',
+        'www-authenticate': 'Bearer error="invalid_token"',
+      },
+    })
+
+  mockTokenAgent
+    .intercept({
+      method: 'POST',
+      path: '/token',
+      body(body) {
+        const p = new URLSearchParams(body)
+        return (
+          p.get('grant_type') === 'refresh_token' &&
+          p.get('refresh_token') === 'refresh-token'
+        )
+      },
+    })
+    .reply(
+      200,
+      {
+        access_token: 'fresh-token',
+        refresh_token: 'new-refresh-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+      },
+      { headers: { 'content-type': 'application/json' } },
     )
 
-  // The original 401 is returned when refresh fails
-  t.is(response.status, 401)
-  // Token set is unchanged since refresh failed
-  t.is(returnedTokens, tokens)
+  mockRsAgent
+    .intercept({
+      method: 'POST',
+      path: '/api/action',
+      headers(h) {
+        return h['authorization'] === 'Bearer fresh-token'
+      },
+    })
+    .reply(
+      200,
+      { ok: true },
+      { headers: { 'content-type': 'application/json' } },
+    )
+
+  const result = await client.fetchProtectedResourceWithAutoRefresh(
+    config,
+    tokens,
+    new URL('https://rs.example.com/api/action'),
+    'POST',
+    'body-text',
+    undefined,
+    { retryNonIdempotentRequests: true },
+  )
+
+  t.is(result.response.status, 200)
+  t.is(result.tokens.access_token, 'fresh-token')
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('fetchProtectedResourceWithAutoRefresh - old refresh_token preserved when response omits it', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockTokenAgent = agent.get('https://as.example.com')
+  const mockRsAgent = agent.get('https://rs.example.com')
+  const config = createConfig(agent)
+
+  // Initial expiring tokens
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'expiring-token',
+      refresh_token: 'old-refresh-token',
+      token_type: 'bearer',
+      expires_in: 5,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  const tokens = await client.refreshTokenGrant(config, 'seed-refresh-token')
+
+  // Server refreshes but does NOT return a new refresh_token
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'new-access-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+      // refresh_token intentionally omitted
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  mockRsAgent
+    .intercept({
+      method: 'GET',
+      path: '/api/resource',
+      headers(h) {
+        return h['authorization'] === 'Bearer new-access-token'
+      },
+    })
+    .reply(
+      200,
+      { ok: true },
+      { headers: { 'content-type': 'application/json' } },
+    )
+
+  const result = await client.fetchProtectedResourceWithAutoRefresh(
+    config,
+    tokens,
+    new URL('https://rs.example.com/api/resource'),
+    'GET',
+  )
+
+  t.is(result.response.status, 200)
+  t.is(result.tokens.access_token, 'new-access-token')
+  // Old refresh token must be preserved (RFC 6749 §6)
+  t.is(result.tokens.refresh_token, 'old-refresh-token')
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('fetchProtectedResourceWithAutoRefresh - old refresh_token preserved after reactive refresh without new token', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockTokenAgent = agent.get('https://as.example.com')
+  const mockRsAgent = agent.get('https://rs.example.com')
+  const config = createConfig(agent)
+
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'stale-access-token',
+      refresh_token: 'old-refresh-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  const tokens = await client.refreshTokenGrant(config, 'seed-refresh-token')
+
+  mockRsAgent
+    .intercept({ method: 'GET', path: '/api/resource' })
+    .reply(401, '', {
+      headers: {
+        'content-type': 'application/json',
+        'www-authenticate': 'Bearer error="invalid_token"',
+      },
+    })
+
+  // Reactive refresh: server returns new access token but no refresh_token
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'fresh-access-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+      // refresh_token omitted
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  mockRsAgent
+    .intercept({
+      method: 'GET',
+      path: '/api/resource',
+      headers(h) {
+        return h['authorization'] === 'Bearer fresh-access-token'
+      },
+    })
+    .reply(
+      200,
+      { ok: true },
+      { headers: { 'content-type': 'application/json' } },
+    )
+
+  const result = await client.fetchProtectedResourceWithAutoRefresh(
+    config,
+    tokens,
+    new URL('https://rs.example.com/api/resource'),
+    'GET',
+  )
+
+  t.is(result.response.status, 200)
+  t.is(result.tokens.access_token, 'fresh-access-token')
+  // Old refresh token must be preserved
+  t.is(result.tokens.refresh_token, 'old-refresh-token')
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('fetchProtectedResourceWithAutoRefresh - invalid refreshThresholdSeconds throws', async (t) => {
+  const agent = new undici.MockAgent()
+  agent.disableNetConnect()
+  const config = createConfig(agent)
+
+  const mockTokens = {
+    access_token: 'tok',
+    token_type: 'bearer',
+    expiresIn: () => 3600,
+  } as client.TokenEndpointResponse & client.TokenEndpointResponseHelpers
+
+  const url = new URL('https://rs.example.com/api')
+
+  await t.throwsAsync(
+    client.fetchProtectedResourceWithAutoRefresh(
+      config,
+      mockTokens,
+      url,
+      'GET',
+      undefined,
+      undefined,
+      { refreshThresholdSeconds: -1 },
+    ),
+    { instanceOf: TypeError },
+  )
+
+  await t.throwsAsync(
+    client.fetchProtectedResourceWithAutoRefresh(
+      config,
+      mockTokens,
+      url,
+      'GET',
+      undefined,
+      undefined,
+      { refreshThresholdSeconds: Infinity },
+    ),
+    { instanceOf: TypeError },
+  )
+
+  await t.throwsAsync(
+    client.fetchProtectedResourceWithAutoRefresh(
+      config,
+      mockTokens,
+      url,
+      'GET',
+      undefined,
+      undefined,
+      { refreshThresholdSeconds: NaN },
+    ),
+    { instanceOf: TypeError },
+  )
+
+  // Zero is valid — should not throw OUR validation error (but may fail on network)
+  const zeroThresholdErr = await client
+    .fetchProtectedResourceWithAutoRefresh(
+      config,
+      mockTokens,
+      url,
+      'GET',
+      undefined,
+      undefined,
+      { refreshThresholdSeconds: 0 },
+    )
+    .then(
+      () => null as unknown,
+      (e: unknown) => e,
+    )
+  // Network errors are expected since no interceptor is set; what must NOT
+  // happen is a validation TypeError mentioning refreshThresholdSeconds.
+  t.false(
+    zeroThresholdErr instanceof TypeError &&
+      String((zeroThresholdErr as TypeError).message).includes(
+        'refreshThresholdSeconds',
+      ),
+    'zero is a valid refreshThresholdSeconds',
+  )
+})
+
+test('fetchProtectedResourceWithAutoRefresh - concurrent proactive refreshes are deduplicated', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockTokenAgent = agent.get('https://as.example.com')
+  const mockRsAgent = agent.get('https://rs.example.com')
+  const config = createConfig(agent)
+  let tokenEndpointCallCount = 0
+
+  // Seed refresh to obtain expiring tokens
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'expiring-token',
+      refresh_token: 'shared-refresh-token',
+      token_type: 'bearer',
+      expires_in: 5,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  const tokens = await client.refreshTokenGrant(config, 'seed')
+
+  // Only one token endpoint call expected despite two concurrent callers
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    () => {
+      tokenEndpointCallCount++
+      return {
+        access_token: 'dedup-access-token',
+        refresh_token: 'dedup-refresh-token',
+        token_type: 'bearer',
+        expires_in: 3600,
+      }
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  // Two resource endpoints, one per concurrent call
+  mockRsAgent
+    .intercept({
+      method: 'GET',
+      path: '/api/resource',
+      headers(h) {
+        return h['authorization'] === 'Bearer dedup-access-token'
+      },
+    })
+    .reply(200, { ok: 1 }, { headers: { 'content-type': 'application/json' } })
+    .times(2)
+
+  const [r1, r2] = await Promise.all([
+    client.fetchProtectedResourceWithAutoRefresh(
+      config,
+      tokens,
+      new URL('https://rs.example.com/api/resource'),
+      'GET',
+    ),
+    client.fetchProtectedResourceWithAutoRefresh(
+      config,
+      tokens,
+      new URL('https://rs.example.com/api/resource'),
+      'GET',
+    ),
+  ])
+
+  t.is(tokenEndpointCallCount, 1, 'Token endpoint must be called exactly once')
+  t.is(r1.tokens.access_token, 'dedup-access-token')
+  t.is(r2.tokens.access_token, 'dedup-access-token')
+  t.is(r1.tokens, r2.tokens, 'Both callers must share the same token object')
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+// ---------------------------------------------------------------------------
+// Telemetry tests
+// ---------------------------------------------------------------------------
+
+test('enableTelemetry - onRequest is called before each request', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockAgent = agent.get('https://as.example.com')
+  const config = createConfig(agent)
+  const requestedUrls: string[] = []
+
+  client.enableTelemetry(config, {
+    onRequest(url) {
+      requestedUrls.push(url)
+    },
+  })
+
+  mockAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'tok',
+      token_type: 'bearer',
+      expires_in: 3600,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  await client.clientCredentialsGrant(config)
+
+  t.is(requestedUrls.length, 1)
+  t.is(new URL(requestedUrls[0]).hostname, 'as.example.com')
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('enableTelemetry - onResponse is called with status and positive duration', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockAgent = agent.get('https://as.example.com')
+  const config = createConfig(agent)
+  let capturedStatus = 0
+  let capturedDuration = -1
+
+  client.enableTelemetry(config, {
+    onResponse(_url, _opts, response, durationMs) {
+      capturedStatus = response.status
+      capturedDuration = durationMs
+    },
+  })
+
+  mockAgent
+    .intercept({ method: 'POST', path: '/token' })
+    .reply(
+      200,
+      { access_token: 'tok', token_type: 'bearer', expires_in: 3600 },
+      { headers: { 'content-type': 'application/json' } },
+    )
+
+  await client.clientCredentialsGrant(config)
+
+  t.is(capturedStatus, 200)
+  t.true(capturedDuration >= 0)
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('enableTelemetry - onError is called on network failure', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockAgent = agent.get('https://as.example.com')
+  const config = createConfig(agent)
+  let capturedError: unknown
+
+  client.enableTelemetry(config, {
+    onError(_url, _opts, error) {
+      capturedError = error
+    },
+  })
+
+  mockAgent
+    .intercept({ method: 'POST', path: '/token' })
+    .replyWithError(new Error('connection refused'))
+
+  await t.throwsAsync(client.clientCredentialsGrant(config))
+
+  t.truthy(capturedError)
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('enableTelemetry - exceptions thrown inside callbacks are swallowed', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockAgent = agent.get('https://as.example.com')
+  const config = createConfig(agent)
+
+  client.enableTelemetry(config, {
+    onRequest() {
+      throw new Error('onRequest exploded')
+    },
+    onResponse() {
+      throw new Error('onResponse exploded')
+    },
+  })
+
+  mockAgent
+    .intercept({ method: 'POST', path: '/token' })
+    .reply(
+      200,
+      { access_token: 'tok', token_type: 'bearer', expires_in: 3600 },
+      { headers: { 'content-type': 'application/json' } },
+    )
+
+  // Callback exceptions must not propagate
+  await t.notThrowsAsync(client.clientCredentialsGrant(config))
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('enableTelemetry - wraps a pre-existing customFetch transparently', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockAgent = agent.get('https://as.example.com')
+  const config = new client.Configuration(
+    {
+      issuer: 'https://as.example.com',
+      token_endpoint: 'https://as.example.com/token',
+    },
+    'client-id',
+    'client-secret',
+  )
+
+  let customFetchCalled = false
+  // @ts-ignore
+  config[client.customFetch] = (url, options) => {
+    customFetchCalled = true
+    return undici.fetch(url, { ...options, dispatcher: agent })
+  }
+
+  let telemetryCalled = false
+  client.enableTelemetry(config, {
+    onRequest() {
+      telemetryCalled = true
+    },
+  })
+
+  mockAgent
+    .intercept({ method: 'POST', path: '/token' })
+    .reply(
+      200,
+      { access_token: 'tok', token_type: 'bearer', expires_in: 3600 },
+      { headers: { 'content-type': 'application/json' } },
+    )
+
+  await client.clientCredentialsGrant(config)
+
+  t.true(customFetchCalled, 'original customFetch must still be called')
+  t.true(telemetryCalled, 'telemetry callback must also be called')
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('enableTelemetry - repeated enablement chains callbacks', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockAgent = agent.get('https://as.example.com')
+  const config = createConfig(agent)
+  const calls: string[] = []
+
+  client.enableTelemetry(config, {
+    onRequest() {
+      calls.push('first')
+    },
+  })
+  client.enableTelemetry(config, {
+    onRequest() {
+      calls.push('second')
+    },
+  })
+
+  mockAgent
+    .intercept({ method: 'POST', path: '/token' })
+    .reply(
+      200,
+      { access_token: 'tok', token_type: 'bearer', expires_in: 3600 },
+      { headers: { 'content-type': 'application/json' } },
+    )
+
+  await client.clientCredentialsGrant(config)
+
+  // Both first and second callbacks must fire
+  t.true(calls.includes('first'))
+  t.true(calls.includes('second'))
   t.notThrows(() => agent.assertNoPendingInterceptors())
 })
