@@ -49,6 +49,7 @@ Support from the community to continue maintaining and improving this module is 
 - [Web app login and logout](docs/guides/web-app-login.md)
 - [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md)
 - [Advanced configuration recipes](docs/guides/advanced-configuration.md)
+- [Mobile-first runtime profile](docs/guides/mobile-first-runtime-profile.md)
 - [Runtime integration notes](docs/guides/runtime-notes.md)
 - [Error handling and troubleshooting](docs/guides/error-handling.md)
 - [Security best practices](docs/guides/security-best-practices.md)

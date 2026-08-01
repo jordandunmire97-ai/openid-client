@@ -208,6 +208,86 @@ test('pollDeviceAuthorizationGrant - passes abort signal to retried token reques
   t.true(seenSignals[1]!.aborted)
 })
 
+test('pollDeviceAuthorizationGrant - adaptive polling updates retry interval', async (t) => {
+  const { agent, mockAgent } = await setupMockAgent()
+  const config = createConfig(agent)
+  const intervals: number[] = []
+
+  mockAgent
+    .intercept({ method: 'POST', path: '/token' })
+    .reply(
+      400,
+      { error: 'authorization_pending' },
+      { headers: { 'content-type': 'application/json' } },
+    )
+
+  mockAgent
+    .intercept({ method: 'POST', path: '/token' })
+    .reply(
+      200,
+      {
+        access_token: 'access_token',
+        token_type: 'bearer',
+      },
+      {
+        headers: {
+          'content-type': 'application/json',
+        },
+      },
+    )
+
+  await client.pollDeviceAuthorizationGrant(
+    config,
+    {
+      device_code: 'device123',
+      user_code: 'user123',
+      verification_uri: `${issuer.origin}/device`,
+      expires_in: 600,
+      interval: 0.1,
+    },
+    undefined,
+    {
+      adaptivePolling: true,
+      minIntervalSeconds: 0.1,
+      maxIntervalSeconds: 2,
+      backoffMultiplier: 2,
+      jitterRatio: 0,
+      onRetry(event) {
+        intervals.push(event.previousIntervalSeconds, event.nextIntervalSeconds)
+      },
+    },
+  )
+
+  t.true(intervals.length >= 2)
+  t.is(intervals[0], 0.1)
+  t.true(intervals[1]! > intervals[0]!)
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('pollDeviceAuthorizationGrant - throws for invalid adaptive interval bounds', async (t) => {
+  const { config } = createSignalTrackingConfig()
+
+  await t.throwsAsync(
+    client.pollDeviceAuthorizationGrant(
+      config,
+      {
+        device_code: 'device123',
+        user_code: 'user123',
+        verification_uri: `${issuer.origin}/device`,
+        expires_in: 600,
+        interval: 0,
+      },
+      undefined,
+      {
+        adaptivePolling: true,
+        minIntervalSeconds: 5,
+        maxIntervalSeconds: 1,
+      },
+    ),
+    { instanceOf: TypeError },
+  )
+})
+
 test('pollBackchannelAuthenticationGrant - respects retry-after header with numeric seconds', async (t) => {
   const { agent, mockAgent } = await setupMockAgent()
 
