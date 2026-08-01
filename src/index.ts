@@ -43,6 +43,17 @@ interface Internal {
   implicit?: boolean
   serverMetadataCache?: Readonly<ServerMetadata> & ServerMetadataHelpers
   clientMetadataCache?: Readonly<oauth.OmitSymbolProperties<ClientMetadata>>
+  mobileProfile?: Readonly<MobileConservativeProfile>
+}
+
+interface MobileConservativeProfile {
+  timeoutSeconds: number
+  refreshThresholdSeconds: number
+  refreshJitterSeconds: number
+  pollMinIntervalSeconds: number
+  pollMaxIntervalSeconds: number
+  pollBackoffMultiplier: number
+  pollJitterRatio: number
 }
 
 const int = (config: Configuration) => {
@@ -2107,6 +2118,55 @@ export interface DeviceAuthorizationGrantPollOptions extends DPoPOptions {
    * {@link initiateDeviceAuthorization}
    */
   signal?: AbortSignal
+
+  /**
+   * Enables adaptive poll interval backoff. When enabled, the next poll
+   * interval increases after retry-worthy responses such as
+   * `authorization_pending`, `slow_down`, and `503` responses.
+   */
+  adaptivePolling?: boolean
+
+  /**
+   * Lower bound in seconds for adaptive polling interval.
+   */
+  minIntervalSeconds?: number
+
+  /**
+   * Upper bound in seconds for adaptive polling interval.
+   */
+  maxIntervalSeconds?: number
+
+  /**
+   * Multiplicative step for adaptive polling interval updates.
+   */
+  backoffMultiplier?: number
+
+  /**
+   * Jitter ratio applied to adaptive polling intervals to reduce synchronized
+   * poll bursts. Use values between `0` and `1`.
+   */
+  jitterRatio?: number
+
+  /**
+   * Called when polling decides the next retry interval.
+   */
+  onRetry?: (event: PollRetryEvent) => void
+}
+
+/**
+ * Poll retry event details for Device and Backchannel polling.
+ *
+ * @group Grants
+ */
+export interface PollRetryEvent {
+  grantType: 'device_authorization' | 'backchannel_authentication'
+  reason:
+    | 'service_unavailable'
+    | 'authorization_pending'
+    | 'slow_down'
+    | 'retryable_error'
+  previousIntervalSeconds: number
+  nextIntervalSeconds: number
 }
 
 /**
@@ -2197,6 +2257,99 @@ function wait(duration: number, signal: AbortSignal): Promise<void> {
 
     waitStep(duration)
   })
+}
+
+interface PollCadence {
+  adaptive: boolean
+  minIntervalSeconds: number
+  maxIntervalSeconds: number
+  backoffMultiplier: number
+  jitterRatio: number
+}
+
+function applyJitter(seconds: number, jitterRatio: number): number {
+  if (jitterRatio <= 0) return seconds
+  const delta = seconds * jitterRatio * (Math.random() * 2 - 1)
+  return Math.max(0, seconds + delta)
+}
+
+function resolvePollCadence(
+  options:
+    | DeviceAuthorizationGrantPollOptions
+    | BackchannelAuthenticationGrantPollOptions
+    | undefined,
+  profile: Readonly<MobileConservativeProfile> | undefined,
+  interval: number,
+): PollCadence {
+  const adaptive = options?.adaptivePolling ?? profile !== undefined
+  const minIntervalSeconds =
+    options?.minIntervalSeconds ?? profile?.pollMinIntervalSeconds ?? interval
+  const maxIntervalSeconds =
+    options?.maxIntervalSeconds ?? profile?.pollMaxIntervalSeconds ?? Infinity
+  const backoffMultiplier =
+    options?.backoffMultiplier ?? profile?.pollBackoffMultiplier ?? 1
+  const jitterRatio = options?.jitterRatio ?? profile?.pollJitterRatio ?? 0
+
+  if (!Number.isFinite(minIntervalSeconds) || minIntervalSeconds < 0) {
+    throw CodedTypeError(
+      '"options.minIntervalSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (
+    maxIntervalSeconds !== Infinity &&
+    (!Number.isFinite(maxIntervalSeconds) || maxIntervalSeconds < 0)
+  ) {
+    throw CodedTypeError(
+      '"options.maxIntervalSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (maxIntervalSeconds < minIntervalSeconds) {
+    throw CodedTypeError(
+      '"options.maxIntervalSeconds" must be greater than or equal to "options.minIntervalSeconds"',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (!Number.isFinite(backoffMultiplier) || backoffMultiplier < 1) {
+    throw CodedTypeError(
+      '"options.backoffMultiplier" must be a finite number greater than or equal to 1',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (!Number.isFinite(jitterRatio) || jitterRatio < 0 || jitterRatio > 1) {
+    throw CodedTypeError(
+      '"options.jitterRatio" must be a finite number between 0 and 1',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+
+  return {
+    adaptive,
+    minIntervalSeconds,
+    maxIntervalSeconds,
+    backoffMultiplier,
+    jitterRatio,
+  }
+}
+
+function nextAdaptivePollInterval(
+  interval: number,
+  cadence: PollCadence,
+  reason: PollRetryEvent['reason'],
+): number {
+  if (!cadence.adaptive) return interval
+
+  let next = interval * cadence.backoffMultiplier
+  if (reason === 'slow_down') {
+    next = Math.max(next, interval + 5)
+  }
+
+  next = Math.max(cadence.minIntervalSeconds, next)
+  next = Math.min(cadence.maxIntervalSeconds, next)
+  next = applyJitter(next, cadence.jitterRatio)
+
+  return next
 }
 
 function pollRequestSignal(
@@ -2296,15 +2449,33 @@ export async function pollDeviceAuthorizationGrant(
     errorHandler(err)
   }
 
-  const { as, c, auth, fetch, tlsOnly, nonRepudiation, timeout, decrypt } =
-    int(config)
+  const {
+    as,
+    c,
+    auth,
+    fetch,
+    tlsOnly,
+    nonRepudiation,
+    timeout,
+    decrypt,
+    mobileProfile,
+  } = int(config)
 
-  const retryPoll = (updatedInterval: number, flag?: typeof retry) =>
-    pollDeviceAuthorizationGrant(
+  const cadence = resolvePollCadence(options, mobileProfile, interval)
+  const retryPoll = (reason: PollRetryEvent['reason'], flag?: typeof retry) => {
+    const previousIntervalSeconds = interval
+    interval = nextAdaptivePollInterval(interval, cadence, reason)
+    options?.onRetry?.({
+      grantType: 'device_authorization',
+      reason,
+      previousIntervalSeconds,
+      nextIntervalSeconds: interval,
+    })
+    return pollDeviceAuthorizationGrant(
       config,
       {
         ...deviceAuthorizationResponse,
-        interval: updatedInterval,
+        interval,
       },
       parameters,
       {
@@ -2313,6 +2484,7 @@ export async function pollDeviceAuthorizationGrant(
         flag,
       },
     )
+  }
 
   const requestSignal = pollRequestSignal(pollingSignal, timeout)
   const response = await oauth
@@ -2336,7 +2508,7 @@ export async function pollDeviceAuthorizationGrant(
   if (response.status === 503 && response.headers.has('retry-after')) {
     await handleRetryAfter(response, interval, pollingSignal, true)
     await response.body?.cancel()
-    return retryPoll(interval)
+    return retryPoll('service_unavailable')
   }
 
   const p = oauth.processDeviceCodeResponse(as, c, response, {
@@ -2348,17 +2520,19 @@ export async function pollDeviceAuthorizationGrant(
     result = await p
   } catch (err) {
     if (retryable(err, options)) {
-      return retryPoll(interval, retry)
+      return retryPoll('retryable_error', retry)
     }
 
     if (err instanceof oauth.ResponseBodyError) {
       switch (err.error) {
         // @ts-ignore
-        case 'slow_down': // Fall through
+        case 'slow_down':
           interval += 5
+          await handleRetryAfter(err.response, interval, pollingSignal)
+          return retryPoll('slow_down')
         case 'authorization_pending':
           await handleRetryAfter(err.response, interval, pollingSignal)
-          return retryPoll(interval)
+          return retryPoll('authorization_pending')
       }
     }
 
@@ -2475,6 +2649,39 @@ export interface BackchannelAuthenticationGrantPollOptions extends DPoPOptions {
    * {@link initiateBackchannelAuthentication}
    */
   signal?: AbortSignal
+
+  /**
+   * Enables adaptive poll interval backoff. When enabled, the next poll
+   * interval increases after retry-worthy responses such as
+   * `authorization_pending`, `slow_down`, and `503` responses.
+   */
+  adaptivePolling?: boolean
+
+  /**
+   * Lower bound in seconds for adaptive polling interval.
+   */
+  minIntervalSeconds?: number
+
+  /**
+   * Upper bound in seconds for adaptive polling interval.
+   */
+  maxIntervalSeconds?: number
+
+  /**
+   * Multiplicative step for adaptive polling interval updates.
+   */
+  backoffMultiplier?: number
+
+  /**
+   * Jitter ratio applied to adaptive polling intervals to reduce synchronized
+   * poll bursts. Use values between `0` and `1`.
+   */
+  jitterRatio?: number
+
+  /**
+   * Called when polling decides the next retry interval.
+   */
+  onRetry?: (event: PollRetryEvent) => void
 }
 
 /**
@@ -2540,15 +2747,33 @@ export async function pollBackchannelAuthenticationGrant(
     errorHandler(err)
   }
 
-  const { as, c, auth, fetch, tlsOnly, nonRepudiation, timeout, decrypt } =
-    int(config)
+  const {
+    as,
+    c,
+    auth,
+    fetch,
+    tlsOnly,
+    nonRepudiation,
+    timeout,
+    decrypt,
+    mobileProfile,
+  } = int(config)
 
-  const retryPoll = (updatedInterval: number, flag?: typeof retry) =>
-    pollBackchannelAuthenticationGrant(
+  const cadence = resolvePollCadence(options, mobileProfile, interval)
+  const retryPoll = (reason: PollRetryEvent['reason'], flag?: typeof retry) => {
+    const previousIntervalSeconds = interval
+    interval = nextAdaptivePollInterval(interval, cadence, reason)
+    options?.onRetry?.({
+      grantType: 'backchannel_authentication',
+      reason,
+      previousIntervalSeconds,
+      nextIntervalSeconds: interval,
+    })
+    return pollBackchannelAuthenticationGrant(
       config,
       {
         ...backchannelAuthenticationResponse,
-        interval: updatedInterval,
+        interval,
       },
       parameters,
       {
@@ -2557,6 +2782,7 @@ export async function pollBackchannelAuthenticationGrant(
         flag,
       },
     )
+  }
 
   const requestSignal = pollRequestSignal(pollingSignal, timeout)
   const response = await oauth
@@ -2580,7 +2806,7 @@ export async function pollBackchannelAuthenticationGrant(
   if (response.status === 503 && response.headers.has('retry-after')) {
     await handleRetryAfter(response, interval, pollingSignal, true)
     await response.body?.cancel()
-    return retryPoll(interval)
+    return retryPoll('service_unavailable')
   }
 
   const p = oauth.processBackchannelAuthenticationGrantResponse(
@@ -2597,17 +2823,19 @@ export async function pollBackchannelAuthenticationGrant(
     result = await p
   } catch (err) {
     if (retryable(err, options)) {
-      return retryPoll(interval, retry)
+      return retryPoll('retryable_error', retry)
     }
 
     if (err instanceof oauth.ResponseBodyError) {
       switch (err.error) {
         // @ts-ignore
-        case 'slow_down': // Fall through
+        case 'slow_down':
           interval += 5
+          await handleRetryAfter(err.response, interval, pollingSignal)
+          return retryPoll('slow_down')
         case 'authorization_pending':
           await handleRetryAfter(err.response, interval, pollingSignal)
-          return retryPoll(interval)
+          return retryPoll('authorization_pending')
       }
     }
 
@@ -2744,6 +2972,136 @@ export function getJwksCache(
 }
 
 /**
+ * Mobile-conservative runtime profile options.
+ *
+ * @group Advanced Configuration
+ */
+export interface MobileConservativeProfileOptions {
+  /**
+   * Timeout (in seconds) applied to outgoing HTTP requests.
+   */
+  timeoutSeconds?: number
+  /**
+   * Default proactive refresh threshold in seconds.
+   */
+  refreshThresholdSeconds?: number
+  /**
+   * Randomized threshold offset (seconds) used to reduce synchronized
+   * refreshes.
+   */
+  refreshJitterSeconds?: number
+  /**
+   * Minimum poll interval in seconds for adaptive grant polling.
+   */
+  pollMinIntervalSeconds?: number
+  /**
+   * Maximum poll interval in seconds for adaptive grant polling.
+   */
+  pollMaxIntervalSeconds?: number
+  /**
+   * Multiplicative backoff factor for adaptive grant polling.
+   */
+  pollBackoffMultiplier?: number
+  /**
+   * Jitter ratio for adaptive grant polling between `0` and `1`.
+   */
+  pollJitterRatio?: number
+}
+
+/**
+ * Enables a mobile-conservative runtime profile optimized for constrained
+ * devices and unstable networks.
+ *
+ * @group Advanced Configuration
+ */
+export function enableMobileConservativeProfile(
+  config: Configuration,
+  options?: MobileConservativeProfileOptions,
+): Readonly<MobileConservativeProfile> {
+  checkConfig(config)
+
+  const timeoutSeconds = options?.timeoutSeconds ?? 15
+  const refreshThresholdSeconds = options?.refreshThresholdSeconds ?? 20
+  const refreshJitterSeconds = options?.refreshJitterSeconds ?? 5
+  const pollMinIntervalSeconds = options?.pollMinIntervalSeconds ?? 2
+  const pollMaxIntervalSeconds = options?.pollMaxIntervalSeconds ?? 30
+  const pollBackoffMultiplier = options?.pollBackoffMultiplier ?? 1.5
+  const pollJitterRatio = options?.pollJitterRatio ?? 0.1
+
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw CodedTypeError(
+      '"options.timeoutSeconds" must be a finite number greater than 0',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (
+    !Number.isFinite(refreshThresholdSeconds) ||
+    refreshThresholdSeconds < 0
+  ) {
+    throw CodedTypeError(
+      '"options.refreshThresholdSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (!Number.isFinite(refreshJitterSeconds) || refreshJitterSeconds < 0) {
+    throw CodedTypeError(
+      '"options.refreshJitterSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (!Number.isFinite(pollMinIntervalSeconds) || pollMinIntervalSeconds < 0) {
+    throw CodedTypeError(
+      '"options.pollMinIntervalSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (!Number.isFinite(pollMaxIntervalSeconds) || pollMaxIntervalSeconds < 0) {
+    throw CodedTypeError(
+      '"options.pollMaxIntervalSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (pollMaxIntervalSeconds < pollMinIntervalSeconds) {
+    throw CodedTypeError(
+      '"options.pollMaxIntervalSeconds" must be greater than or equal to "options.pollMinIntervalSeconds"',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (!Number.isFinite(pollBackoffMultiplier) || pollBackoffMultiplier < 1) {
+    throw CodedTypeError(
+      '"options.pollBackoffMultiplier" must be a finite number greater than or equal to 1',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (
+    !Number.isFinite(pollJitterRatio) ||
+    pollJitterRatio < 0 ||
+    pollJitterRatio > 1
+  ) {
+    throw CodedTypeError(
+      '"options.pollJitterRatio" must be a finite number between 0 and 1',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+
+  const profile = Object.freeze({
+    timeoutSeconds,
+    refreshThresholdSeconds,
+    refreshJitterSeconds,
+    pollMinIntervalSeconds,
+    pollMaxIntervalSeconds,
+    pollBackoffMultiplier,
+    pollJitterRatio,
+  })
+
+  const internals = int(config)
+  internals.timeout = timeoutSeconds
+  internals.mobileProfile = profile
+
+  return profile
+}
+
+/**
  * Telemetry event handlers passed to {@link enableTelemetry}.
  *
  * > [!WARNING]\
@@ -2784,6 +3142,174 @@ export interface TelemetryCallbacks {
     options: Readonly<CustomFetchOptions>,
     error: unknown,
   ) => void
+}
+
+/**
+ * Refresh event details emitted by
+ * {@link fetchProtectedResourceWithAutoRefresh}.
+ *
+ * @group Token Management
+ */
+export interface RefreshEvent {
+  mode: 'proactive' | 'reactive'
+  outcome: 'success' | 'error'
+  deduplicated: boolean
+}
+
+/**
+ * Challenge event details emitted by
+ * {@link fetchProtectedResourceWithAutoRefresh}.
+ *
+ * @group Protected Resource Requests
+ */
+export interface ChallengeEvent {
+  retriable: boolean
+  scheme: 'bearer_or_dpop' | 'other'
+}
+
+/**
+ * Snapshot returned by {@link MobileDiagnosticsCollector.snapshot}.
+ *
+ * @group Advanced Configuration
+ */
+export interface MobileDiagnosticsSnapshot {
+  requests: number
+  responses: number
+  networkErrors: number
+  totalRequestDurationMs: number
+  averageRequestDurationMs: number
+  pollRetries: Record<PollRetryEvent['reason'], number>
+  refresh: {
+    proactiveSuccess: number
+    proactiveError: number
+    reactiveSuccess: number
+    reactiveError: number
+  }
+  challenges: {
+    retriable: number
+    other: number
+  }
+}
+
+/**
+ * Diagnostics collector that can be passed into {@link enableTelemetry},
+ * {@link pollDeviceAuthorizationGrant},
+ * {@link pollBackchannelAuthenticationGrant}, and
+ * {@link fetchProtectedResourceWithAutoRefresh}.
+ *
+ * @group Advanced Configuration
+ */
+export interface MobileDiagnosticsCollector extends TelemetryCallbacks {
+  recordPollRetry(event: PollRetryEvent): void
+  recordRefresh(event: RefreshEvent): void
+  recordChallenge(event: ChallengeEvent): void
+  snapshot(): MobileDiagnosticsSnapshot
+  reset(): void
+}
+
+/**
+ * Creates a reusable diagnostics collector for grant polling and token refresh
+ * behavior.
+ *
+ * @group Advanced Configuration
+ */
+export function createMobileDiagnosticsCollector(): MobileDiagnosticsCollector {
+  const state = {
+    requests: 0,
+    responses: 0,
+    networkErrors: 0,
+    totalRequestDurationMs: 0,
+    pollRetries: {
+      service_unavailable: 0,
+      authorization_pending: 0,
+      slow_down: 0,
+      retryable_error: 0,
+    } as Record<PollRetryEvent['reason'], number>,
+    refresh: {
+      proactiveSuccess: 0,
+      proactiveError: 0,
+      reactiveSuccess: 0,
+      reactiveError: 0,
+    },
+    challenges: {
+      retriable: 0,
+      other: 0,
+    },
+  }
+
+  const collector: MobileDiagnosticsCollector = {
+    onRequest() {
+      state.requests++
+    },
+    onResponse(_url, _options, _response, durationMs) {
+      state.responses++
+      state.totalRequestDurationMs += durationMs
+    },
+    onError() {
+      state.networkErrors++
+    },
+    recordPollRetry(event) {
+      state.pollRetries[event.reason]++
+    },
+    recordRefresh(event) {
+      if (event.mode === 'proactive') {
+        if (event.outcome === 'success') {
+          state.refresh.proactiveSuccess++
+        } else {
+          state.refresh.proactiveError++
+        }
+      } else if (event.outcome === 'success') {
+        state.refresh.reactiveSuccess++
+      } else {
+        state.refresh.reactiveError++
+      }
+    },
+    recordChallenge(event) {
+      if (event.retriable) {
+        state.challenges.retriable++
+      } else {
+        state.challenges.other++
+      }
+    },
+    snapshot() {
+      const averageRequestDurationMs =
+        state.responses > 0 ? state.totalRequestDurationMs / state.responses : 0
+      return {
+        requests: state.requests,
+        responses: state.responses,
+        networkErrors: state.networkErrors,
+        totalRequestDurationMs: state.totalRequestDurationMs,
+        averageRequestDurationMs,
+        pollRetries: {
+          ...state.pollRetries,
+        },
+        refresh: {
+          ...state.refresh,
+        },
+        challenges: {
+          ...state.challenges,
+        },
+      }
+    },
+    reset() {
+      state.requests = 0
+      state.responses = 0
+      state.networkErrors = 0
+      state.totalRequestDurationMs = 0
+      state.pollRetries.service_unavailable = 0
+      state.pollRetries.authorization_pending = 0
+      state.pollRetries.slow_down = 0
+      state.pollRetries.retryable_error = 0
+      state.refresh.proactiveSuccess = 0
+      state.refresh.proactiveError = 0
+      state.refresh.reactiveSuccess = 0
+      state.refresh.reactiveError = 0
+      state.challenges.retriable = 0
+      state.challenges.other = 0
+    },
+  }
+
+  return collector
 }
 
 /**
@@ -4828,6 +5354,12 @@ export interface FetchProtectedResourceAutoRefreshOptions extends DPoPOptions {
   refreshThresholdSeconds?: number
 
   /**
+   * Randomized threshold offset (seconds) subtracted from the proactive refresh
+   * threshold to reduce synchronized refresh bursts across clients.
+   */
+  refreshJitterSeconds?: number
+
+  /**
    * When `true`, non-idempotent HTTP methods (such as `POST` and `PATCH`) are
    * eligible for retry after a reactive refresh, provided the request body is
    * also replayable (i.e. not a {@link !ReadableStream}). Only enable this when
@@ -4839,6 +5371,16 @@ export interface FetchProtectedResourceAutoRefreshOptions extends DPoPOptions {
    * Default is `false`.
    */
   retryNonIdempotentRequests?: boolean
+
+  /**
+   * Called when a proactive or reactive refresh attempt completes.
+   */
+  onRefresh?: (event: RefreshEvent) => void
+
+  /**
+   * Called when a `401` challenge is evaluated for reactive refresh.
+   */
+  onChallenge?: (event: ChallengeEvent) => void
 }
 
 /**
@@ -4938,6 +5480,13 @@ function deduplicateRefresh(
   return promise
 }
 
+function hasInflightRefresh(
+  config: Configuration,
+  refreshToken: string,
+): boolean {
+  return inflightRefreshes.get(config)?.has(refreshToken) === true
+}
+
 /**
  * Performs an arbitrary Protected Resource request, automatically refreshing
  * the access token when it is near expiry or when the resource server responds
@@ -5035,6 +5584,7 @@ export async function fetchProtectedResourceWithAutoRefresh(
   options?: FetchProtectedResourceAutoRefreshOptions,
 ): Promise<ProtectedResourceResponse> {
   checkConfig(config)
+  const { mobileProfile } = int(config)
 
   const thresholdInput = options?.refreshThresholdSeconds
   if (thresholdInput !== undefined) {
@@ -5049,7 +5599,20 @@ export async function fetchProtectedResourceWithAutoRefresh(
       )
     }
   }
-  const threshold = thresholdInput ?? 30
+  const threshold =
+    thresholdInput ?? mobileProfile?.refreshThresholdSeconds ?? 30
+  const refreshJitterSeconds =
+    options?.refreshJitterSeconds ?? mobileProfile?.refreshJitterSeconds ?? 0
+  if (!Number.isFinite(refreshJitterSeconds) || refreshJitterSeconds < 0) {
+    throw CodedTypeError(
+      '"options.refreshJitterSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  const proactiveThreshold = Math.max(
+    0,
+    threshold - Math.random() * refreshJitterSeconds,
+  )
 
   let currentTokens: oauth.TokenEndpointResponse &
     TokenEndpointResponseHelpers = tokens
@@ -5059,17 +5622,32 @@ export async function fetchProtectedResourceWithAutoRefresh(
   // Concurrent calls sharing the same refresh token are deduplicated.
   if (
     currentTokens.refresh_token !== undefined &&
-    (currentTokens.expiresIn() ?? Infinity) <= threshold
+    (currentTokens.expiresIn() ?? Infinity) <= proactiveThreshold
   ) {
     const oldRefreshToken = currentTokens.refresh_token
-    currentTokens = await deduplicateRefresh(config, oldRefreshToken, () =>
-      refreshTokenGrant(
-        config,
-        oldRefreshToken,
-        options?.refreshParameters,
-        options,
-      ),
-    )
+    const deduplicated = hasInflightRefresh(config, oldRefreshToken)
+    try {
+      currentTokens = await deduplicateRefresh(config, oldRefreshToken, () =>
+        refreshTokenGrant(
+          config,
+          oldRefreshToken,
+          options?.refreshParameters,
+          options,
+        ),
+      )
+      options?.onRefresh?.({
+        mode: 'proactive',
+        outcome: 'success',
+        deduplicated,
+      })
+    } catch (err) {
+      options?.onRefresh?.({
+        mode: 'proactive',
+        outcome: 'error',
+        deduplicated,
+      })
+      throw err
+    }
     // RFC 6749 §6: if the server does not issue a new refresh token, carry
     // the existing one forward.
     if (currentTokens.refresh_token === undefined) {
@@ -5097,7 +5675,12 @@ export async function fetchProtectedResourceWithAutoRefresh(
   } catch (err) {
     if (err instanceof oauth.WWWAuthenticateChallengeError) {
       const challengeResponse = err.response as Response
-      if (isBearerOrDPoPChallenge(challengeResponse)) {
+      const retriable = isBearerOrDPoPChallenge(challengeResponse)
+      options?.onChallenge?.({
+        retriable,
+        scheme: retriable ? 'bearer_or_dpop' : 'other',
+      })
+      if (retriable) {
         // Bearer or DPoP challenge — decide whether a reactive refresh can help.
         response = challengeResponse
         bearerOrDPoPChallengeCaught = true
@@ -5122,6 +5705,7 @@ export async function fetchProtectedResourceWithAutoRefresh(
     (isSafeReplayMethod(method) || options?.retryNonIdempotentRequests === true)
   ) {
     const oldRefreshToken = currentTokens.refresh_token
+    const deduplicated = hasInflightRefresh(config, oldRefreshToken)
     let refreshed:
       | (oauth.TokenEndpointResponse & TokenEndpointResponseHelpers)
       | null = null
@@ -5135,8 +5719,18 @@ export async function fetchProtectedResourceWithAutoRefresh(
           options,
         ),
       )
+      options?.onRefresh?.({
+        mode: 'reactive',
+        outcome: 'success',
+        deduplicated,
+      })
     } catch (err) {
       refreshError = err
+      options?.onRefresh?.({
+        mode: 'reactive',
+        outcome: 'error',
+        deduplicated,
+      })
     }
 
     if (refreshed !== null) {

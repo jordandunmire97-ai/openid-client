@@ -1309,3 +1309,188 @@ test('enableTelemetry - repeated enablement chains callbacks', async (t) => {
   t.true(calls.includes('second'))
   t.notThrows(() => agent.assertNoPendingInterceptors())
 })
+
+test('enableMobileConservativeProfile applies constrained-runtime defaults', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockTokenAgent = agent.get('https://as.example.com')
+  const mockRsAgent = agent.get('https://rs.example.com')
+  const config = createConfig(agent)
+
+  const profile = client.enableMobileConservativeProfile(config, {
+    refreshThresholdSeconds: 20,
+    refreshJitterSeconds: 0,
+    pollJitterRatio: 0,
+  })
+
+  t.is(config.timeout, 15)
+  t.is(profile.refreshThresholdSeconds, 20)
+
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'expiring-access-token',
+      refresh_token: 'expiring-refresh-token',
+      token_type: 'bearer',
+      expires_in: 19,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  const tokens = await client.refreshTokenGrant(config, 'seed-refresh-token')
+
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'profile-refreshed-access-token',
+      refresh_token: 'profile-refreshed-refresh-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  mockRsAgent
+    .intercept({
+      method: 'GET',
+      path: '/api/resource',
+    })
+    .reply(
+      200,
+      { ok: true },
+      { headers: { 'content-type': 'application/json' } },
+    )
+
+  const result = await client.fetchProtectedResourceWithAutoRefresh(
+    config,
+    tokens,
+    new URL('https://rs.example.com/api/resource'),
+    'GET',
+  )
+
+  t.is(result.tokens.access_token, 'profile-refreshed-access-token')
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('createMobileDiagnosticsCollector tracks telemetry and refresh outcomes', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockTokenAgent = agent.get('https://as.example.com')
+  const mockRsAgent = agent.get('https://rs.example.com')
+  const config = createConfig(agent)
+
+  const diagnostics = client.createMobileDiagnosticsCollector()
+  client.enableTelemetry(config, diagnostics)
+
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'expiring-access-token',
+      refresh_token: 'expiring-refresh-token',
+      token_type: 'bearer',
+      expires_in: 10,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  const tokens = await client.refreshTokenGrant(config, 'seed-refresh-token')
+
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'refreshed-access-token',
+      refresh_token: 'refreshed-refresh-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+
+  mockRsAgent
+    .intercept({ method: 'GET', path: '/api/resource' })
+    .reply(
+      200,
+      { ok: true },
+      { headers: { 'content-type': 'application/json' } },
+    )
+
+  await client.fetchProtectedResourceWithAutoRefresh(
+    config,
+    tokens,
+    new URL('https://rs.example.com/api/resource'),
+    'GET',
+    undefined,
+    undefined,
+    {
+      onRefresh: diagnostics.recordRefresh,
+    },
+  )
+
+  const snapshot = diagnostics.snapshot()
+  t.true(snapshot.requests >= 3)
+  t.true(snapshot.responses >= 3)
+  t.is(snapshot.refresh.proactiveSuccess, 1)
+  t.is(snapshot.refresh.proactiveError, 0)
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
+
+test('createMobileDiagnosticsCollector tracks retriable challenges and reactive refresh errors', async (t) => {
+  let agent = new undici.MockAgent()
+  agent.disableNetConnect()
+
+  const mockTokenAgent = agent.get('https://as.example.com')
+  const mockRsAgent = agent.get('https://rs.example.com')
+  const config = createConfig(agent)
+
+  const diagnostics = client.createMobileDiagnosticsCollector()
+
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'stale-access-token',
+      refresh_token: 'valid-refresh-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
+  const tokens = await client.refreshTokenGrant(config, 'seed-refresh-token')
+
+  mockRsAgent
+    .intercept({ method: 'GET', path: '/api/resource' })
+    .reply(401, '', {
+      headers: {
+        'www-authenticate': 'DPoP error="invalid_token"',
+      },
+    })
+
+  mockTokenAgent
+    .intercept({ method: 'POST', path: '/token' })
+    .reply(
+      500,
+      { error: 'server_error' },
+      { headers: { 'content-type': 'application/json' } },
+    )
+
+  const result = await client.fetchProtectedResourceWithAutoRefresh(
+    config,
+    tokens,
+    new URL('https://rs.example.com/api/resource'),
+    'GET',
+    undefined,
+    undefined,
+    {
+      onChallenge: diagnostics.recordChallenge,
+      onRefresh: diagnostics.recordRefresh,
+    },
+  )
+
+  t.truthy(result.refreshError)
+  const snapshot = diagnostics.snapshot()
+  t.is(snapshot.challenges.retriable, 1)
+  t.is(snapshot.challenges.other, 0)
+  t.is(snapshot.refresh.reactiveError, 1)
+  t.notThrows(() => agent.assertNoPendingInterceptors())
+})
