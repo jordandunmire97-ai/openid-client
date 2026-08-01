@@ -221,20 +221,18 @@ test('pollDeviceAuthorizationGrant - adaptive polling updates retry interval', a
       { headers: { 'content-type': 'application/json' } },
     )
 
-  mockAgent
-    .intercept({ method: 'POST', path: '/token' })
-    .reply(
-      200,
-      {
-        access_token: 'access_token',
-        token_type: 'bearer',
+  mockAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'access_token',
+      token_type: 'bearer',
+    },
+    {
+      headers: {
+        'content-type': 'application/json',
       },
-      {
-        headers: {
-          'content-type': 'application/json',
-        },
-      },
-    )
+    },
+  )
 
   await client.pollDeviceAuthorizationGrant(
     config,

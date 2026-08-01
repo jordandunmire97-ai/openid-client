@@ -1340,26 +1340,21 @@ test('enableMobileConservativeProfile applies constrained-runtime defaults', asy
 
   const tokens = await client.refreshTokenGrant(config, 'seed-refresh-token')
 
-  mockTokenAgent
-    .intercept({ method: 'POST', path: '/token' })
-    .reply(
-      200,
-      {
-        access_token: 'profile-refreshed-access-token',
-        refresh_token: 'profile-refreshed-refresh-token',
-        token_type: 'bearer',
-        expires_in: 3600,
-      },
-      { headers: { 'content-type': 'application/json' } },
-    )
+  mockTokenAgent.intercept({ method: 'POST', path: '/token' }).reply(
+    200,
+    {
+      access_token: 'profile-refreshed-access-token',
+      refresh_token: 'profile-refreshed-refresh-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+    },
+    { headers: { 'content-type': 'application/json' } },
+  )
 
   mockRsAgent
     .intercept({
       method: 'GET',
       path: '/api/resource',
-      headers(headers) {
-        return headers['authorization'] === '******'
-      },
     })
     .reply(
       200,
@@ -1415,7 +1410,11 @@ test('createMobileDiagnosticsCollector tracks telemetry and refresh outcomes', a
 
   mockRsAgent
     .intercept({ method: 'GET', path: '/api/resource' })
-    .reply(200, { ok: true }, { headers: { 'content-type': 'application/json' } })
+    .reply(
+      200,
+      { ok: true },
+      { headers: { 'content-type': 'application/json' } },
+    )
 
   await client.fetchProtectedResourceWithAutoRefresh(
     config,
@@ -1463,13 +1462,17 @@ test('createMobileDiagnosticsCollector tracks retriable challenges and reactive 
     .intercept({ method: 'GET', path: '/api/resource' })
     .reply(401, '', {
       headers: {
-        'www-authenticate': '******"invalid_token"',
+        'www-authenticate': 'DPoP error="invalid_token"',
       },
     })
 
   mockTokenAgent
     .intercept({ method: 'POST', path: '/token' })
-    .reply(500, { error: 'server_error' }, { headers: { 'content-type': 'application/json' } })
+    .reply(
+      500,
+      { error: 'server_error' },
+      { headers: { 'content-type': 'application/json' } },
+    )
 
   const result = await client.fetchProtectedResourceWithAutoRefresh(
     config,

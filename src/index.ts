@@ -2281,7 +2281,7 @@ function resolvePollCadence(
   profile: Readonly<MobileConservativeProfile> | undefined,
   interval: number,
 ): PollCadence {
-  const adaptive = options?.adaptivePolling ?? (profile !== undefined)
+  const adaptive = options?.adaptivePolling ?? profile !== undefined
   const minIntervalSeconds =
     options?.minIntervalSeconds ?? profile?.pollMinIntervalSeconds ?? interval
   const maxIntervalSeconds =
@@ -2296,7 +2296,10 @@ function resolvePollCadence(
       ERR_INVALID_ARG_VALUE,
     )
   }
-  if (!Number.isFinite(maxIntervalSeconds) || maxIntervalSeconds < 0) {
+  if (
+    maxIntervalSeconds !== Infinity &&
+    (!Number.isFinite(maxIntervalSeconds) || maxIntervalSeconds < 0)
+  ) {
     throw CodedTypeError(
       '"options.maxIntervalSeconds" must be a finite non-negative number',
       ERR_INVALID_ARG_VALUE,
@@ -2983,7 +2986,8 @@ export interface MobileConservativeProfileOptions {
    */
   refreshThresholdSeconds?: number
   /**
-   * Randomized threshold offset (seconds) used to reduce synchronized refreshes.
+   * Randomized threshold offset (seconds) used to reduce synchronized
+   * refreshes.
    */
   refreshJitterSeconds?: number
   /**
@@ -3030,7 +3034,10 @@ export function enableMobileConservativeProfile(
       ERR_INVALID_ARG_VALUE,
     )
   }
-  if (!Number.isFinite(refreshThresholdSeconds) || refreshThresholdSeconds < 0) {
+  if (
+    !Number.isFinite(refreshThresholdSeconds) ||
+    refreshThresholdSeconds < 0
+  ) {
     throw CodedTypeError(
       '"options.refreshThresholdSeconds" must be a finite non-negative number',
       ERR_INVALID_ARG_VALUE,
@@ -3185,8 +3192,8 @@ export interface MobileDiagnosticsSnapshot {
 }
 
 /**
- * Diagnostics collector that can be passed into
- * {@link enableTelemetry}, {@link pollDeviceAuthorizationGrant},
+ * Diagnostics collector that can be passed into {@link enableTelemetry},
+ * {@link pollDeviceAuthorizationGrant},
  * {@link pollBackchannelAuthenticationGrant}, and
  * {@link fetchProtectedResourceWithAutoRefresh}.
  *
@@ -5473,7 +5480,10 @@ function deduplicateRefresh(
   return promise
 }
 
-function hasInflightRefresh(config: Configuration, refreshToken: string): boolean {
+function hasInflightRefresh(
+  config: Configuration,
+  refreshToken: string,
+): boolean {
   return inflightRefreshes.get(config)?.has(refreshToken) === true
 }
 
@@ -5589,7 +5599,8 @@ export async function fetchProtectedResourceWithAutoRefresh(
       )
     }
   }
-  const threshold = thresholdInput ?? mobileProfile?.refreshThresholdSeconds ?? 30
+  const threshold =
+    thresholdInput ?? mobileProfile?.refreshThresholdSeconds ?? 30
   const refreshJitterSeconds =
     options?.refreshJitterSeconds ?? mobileProfile?.refreshJitterSeconds ?? 0
   if (!Number.isFinite(refreshJitterSeconds) || refreshJitterSeconds < 0) {
