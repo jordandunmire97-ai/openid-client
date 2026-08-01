@@ -66,6 +66,7 @@ import * as client from 'openid-client'
 - Authorization Code Flow (OpenID Connect) - [source](examples/oidc.ts) | [diff](examples/oidc.diff)
 - Logout - [source](examples/logout.ts)
 - Additional Grants
+  - Protected Resource Auto-Refresh - [source](examples/auto-refresh.ts)
   - Client Credentials - [source](examples/client-credentials.ts)
   - Device Authorization - [source](examples/device.ts)
   - Client-Initiated Backchannel Authentication (CIBA) - [source](examples/ciba.ts)
@@ -86,6 +87,7 @@ import * as client from 'openid-client'
 | Authorization Code Flow (OAuth 2.0) | [oauth.ts](examples/oauth.ts) | [Web app login and logout](docs/guides/web-app-login.md) | [passport.test.ts](test/passport.test.ts) |
 | Authorization Code Flow (OpenID Connect) | [oidc.ts](examples/oidc.ts) | [Web app login and logout](docs/guides/web-app-login.md) | [passport.test.ts](test/passport.test.ts) |
 | RP-initiated logout | [logout.ts](examples/logout.ts) | [Web app login and logout](docs/guides/web-app-login.md) | [feature-scenarios.test.ts](test/feature-scenarios.test.ts) |
+| Protected resource auto-refresh | [auto-refresh.ts](examples/auto-refresh.ts) | [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md) | [feature-scenarios.test.ts](test/feature-scenarios.test.ts) |
 | Client Credentials Grant | [client-credentials.ts](examples/client-credentials.ts) | [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md) | [feature-scenarios.test.ts](test/feature-scenarios.test.ts) |
 | Token Exchange Grant (RFC 8693) | [token-exchange.ts](examples/token-exchange.ts) | | [token-exchange.test.ts](test/token-exchange.test.ts) |
 | Device Authorization Grant | [device.ts](examples/device.ts) | [Token lifecycle and protected resource access](docs/guides/token-lifecycle.md) | [retry-after.test.ts](test/retry-after.test.ts) |

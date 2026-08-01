@@ -20,6 +20,7 @@ A collection of examples for the most common use cases.
 - Authorization Code Flow (OpenID Connect) - [source](oidc.ts) | [diff](oidc.diff)
 - Logout - [source](logout.ts)
 - Additional Grants
+  - Protected Resource Auto-Refresh - [source](auto-refresh.ts)
   - Client Credentials - [source](client-credentials.ts)
   - Device Authorization - [source](device.ts)
   - Client-Initiated Backchannel Authentication (CIBA) - [source](ciba.ts)
