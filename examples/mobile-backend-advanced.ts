@@ -21,9 +21,11 @@ let resourceServerUrl!: URL // e.g., 'https://rs.example.com/api/me'
 
 declare module 'express-session' {
   interface SessionData {
-    code_verifier: string
+    code_verifier: string | undefined
     nonce: string | undefined
-    tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers
+    tokens:
+      | (client.TokenEndpointResponse & client.TokenEndpointResponseHelpers)
+      | undefined
   }
 }
 

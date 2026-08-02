@@ -20,8 +20,8 @@ let deepLinkUrl!: string // e.g., 'myapp://login-success'
 
 declare module 'express-session' {
   interface SessionData {
-    code_verifier?: string
-    nonce?: string
+    code_verifier: string | undefined
+    nonce: string | undefined
   }
 }
 

@@ -19,10 +19,10 @@ let sessionSecret!: string // Secret to sign session cookies with
 
 declare module 'express-session' {
   interface SessionData {
-    code_verifier: string
+    code_verifier: string | undefined
     nonce: string | undefined
-    sub: string
-    access_token: string
+    sub: string | undefined
+    access_token: string | undefined
     id_token: string | undefined
   }
 }
