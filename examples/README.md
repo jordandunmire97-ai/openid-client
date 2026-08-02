@@ -34,6 +34,7 @@ A collection of examples for the most common use cases.
 - Passport Strategy - [source](passport.ts)
 - Express.js Integration - [source](express.ts)
 - Mobile App Backend (Phone UI) - [source](mobile-backend.ts)
+- Mobile App Backend with Auto-Refresh, Telemetry, and Diagnostics - [source](mobile-backend-advanced.ts)
 - Practical Guides - [source](../docs/guides/README.md)
 
 [sponsor-auth0]: https://a0.to/signup/panva
