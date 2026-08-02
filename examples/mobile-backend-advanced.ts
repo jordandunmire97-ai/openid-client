@@ -21,9 +21,9 @@ let resourceServerUrl!: URL // e.g., 'https://rs.example.com/api/me'
 
 declare module 'express-session' {
   interface SessionData {
-    code_verifier?: string
-    nonce?: string
-    tokens?: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers
+    code_verifier: string
+    nonce: string | undefined
+    tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers
   }
 }
 
@@ -58,9 +58,9 @@ app.use(
 /**
  * GET /auth/login
  *
- * The phone app opens a system browser (e.g. ASWebAuthenticationSession) to this
- * endpoint. The route generates PKCE values, stores them, and redirects the user
- * to the Authorization Server's authorization endpoint.
+ * The phone app opens a system browser (e.g. ASWebAuthenticationSession) to
+ * this endpoint. The route generates PKCE values, stores them, and redirects
+ * the user to the Authorization Server's authorization endpoint.
  */
 app.get('/auth/login', async (req, res) => {
   let code_verifier = client.randomPKCECodeVerifier()
