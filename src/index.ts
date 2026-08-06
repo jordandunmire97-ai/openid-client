@@ -1,5 +1,4 @@
 import * as oauth from 'oauth4webapi'
-import { compactDecrypt } from 'jose/jwe/compact/decrypt'
 import { JOSEError } from 'jose/errors'
 
 let headers: Record<string, string>
@@ -1694,6 +1693,8 @@ async function decrypt(
   contentEncryptionAlgorithms: string[],
   keyManagementAlgorithms: string[],
 ): Promise<string> {
+  const { compactDecrypt } = await import('jose/jwe/compact/decrypt')
+
   return decoder.decode(
     (
       await compactDecrypt(
