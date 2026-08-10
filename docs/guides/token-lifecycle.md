@@ -62,7 +62,93 @@ protected-resource request. A small application-defined safety window accounts
 for clock skew and network latency without adding unnecessary token-endpoint
 traffic.
 
-## Introspect and revoke tokens
+## Automatic token refresh around protected resource calls
+
+`fetchProtectedResourceWithAutoRefresh` wraps `fetchProtectedResource` with
+two layers of refresh logic so you do not need to write refresh-before-call
+boilerplate:
+
+1. **Proactive refresh** — if the stored access token expires within
+   `refreshThresholdSeconds` (default: 30), the token is refreshed *before*
+   the request is sent.
+2. **Reactive refresh** — if the resource server responds with a ****** DPoP
+   `WWW-Authenticate` challenge that indicates the token is invalid or expired
+   (e.g. `error="invalid_token"`), the token is refreshed and the request is
+   retried once. Challenges with `error="insufficient_scope"` or
+   `error="invalid_request"` are re-thrown as `WWWAuthenticateChallengeError`
+   because a refresh will not help.
+
+Concurrent calls that share the same `Configuration` and refresh token
+are deduplicated: only one token-endpoint request is issued and all callers
+receive the same result.
+
+```ts
+let config!: client.Configuration
+let tokens!: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers
+
+let { response, tokens: updatedTokens, refreshError } =
+  await client.fetchProtectedResourceWithAutoRefresh(
+    config,
+    tokens,
+    new URL('https://rs.example.com/api'),
+    'GET',
+  )
+
+// Always persist the returned tokens — they may have been refreshed.
+await saveTokenSet(updatedTokens)
+
+// A refresh error is exposed without masking the original resource response
+// so you can decide how to handle the failure.
+if (refreshError) {
+  console.warn('Token refresh failed; using stale tokens', refreshError)
+}
+```
+
+Per [RFC 6749 §6](https://www.rfc-editor.org/rfc/rfc6749#section-6), if the
+authorization server does not return a new refresh token, the existing one is
+retained automatically.
+
+### Non-idempotent methods and stream bodies
+
+By default only idempotent methods (GET, HEAD, OPTIONS, TRACE) are retried
+after a reactive refresh. POST and other non-idempotent methods are not
+retried unless you explicitly opt in:
+
+```ts
+let { response, tokens: updatedTokens } =
+  await client.fetchProtectedResourceWithAutoRefresh(
+    config,
+    tokens,
+    new URL('https://rs.example.com/api/action'),
+    'POST',
+    JSON.stringify({ action: 'do' }),
+    { 'content-type': 'application/json' },
+    { retryNonIdempotentRequests: true },
+  )
+```
+
+`ReadableStream` bodies can never be replayed and are never retried regardless
+of the method or option value.
+
+### Tuning the proactive refresh window
+
+```ts
+let { response, tokens: updatedTokens } =
+  await client.fetchProtectedResourceWithAutoRefresh(
+    config,
+    tokens,
+    new URL('https://rs.example.com/api'),
+    'GET',
+    undefined,
+    undefined,
+    { refreshThresholdSeconds: 60 },
+  )
+```
+
+`refreshThresholdSeconds` must be a finite, non-negative number, or a
+`TypeError` is thrown at call time.
+
+
 
 Use the token management endpoints when the authorization server exposes them.
 
