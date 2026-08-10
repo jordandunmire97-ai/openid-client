@@ -1723,6 +1723,45 @@ export interface ServerMetadataHelpers {
    * @param method Code Challenge Method. Default is `S256`
    */
   supportsPKCE(method?: string): boolean
+  /**
+   * Determines whether the Authorization Server supports a given grant type.
+   *
+   * @param grantType Grant type
+   */
+  supportsGrantType(grantType: string): boolean
+  /**
+   * Determines whether the Authorization Server supports a given response type.
+   *
+   * @param responseType Response type
+   */
+  supportsResponseType(responseType: string): boolean
+  /**
+   * Determines whether the Authorization Server supports a given response mode.
+   *
+   * @param responseMode Response mode
+   */
+  supportsResponseMode(responseMode: string): boolean
+  /**
+   * Determines whether the Authorization Server supports a given token endpoint
+   * client authentication method.
+   *
+   * @param method Token endpoint client authentication method
+   */
+  supportsTokenEndpointAuthMethod(method: string): boolean
+  /**
+   * Determines whether the Authorization Server supports a given authorization
+   * response signing algorithm.
+   *
+   * @param algorithm JSON Web Signature algorithm
+   */
+  supportsAuthorizationSigningAlgorithm(algorithm: string): boolean
+  /**
+   * Determines whether the Authorization Server supports a given UserInfo
+   * response signing algorithm.
+   *
+   * @param algorithm JSON Web Signature algorithm
+   */
+  supportsUserInfoSigningAlgorithm(algorithm: string): boolean
 }
 
 function getServerHelpers(metadata: Readonly<ServerMetadata>) {
@@ -1732,6 +1771,57 @@ function getServerHelpers(metadata: Readonly<ServerMetadata>) {
       value(method = 'S256') {
         return (
           metadata.code_challenge_methods_supported?.includes(method) === true
+        )
+      },
+    },
+    supportsGrantType: {
+      __proto__: null,
+      value(grantType: string) {
+        return metadata.grant_types_supported?.includes(grantType) === true
+      },
+    },
+    supportsResponseType: {
+      __proto__: null,
+      value(responseType: string) {
+        return (
+          metadata.response_types_supported?.includes(responseType) === true
+        )
+      },
+    },
+    supportsResponseMode: {
+      __proto__: null,
+      value(responseMode: string) {
+        return (
+          metadata.response_modes_supported?.includes(responseMode) === true
+        )
+      },
+    },
+    supportsTokenEndpointAuthMethod: {
+      __proto__: null,
+      value(method: string) {
+        return (
+          metadata.token_endpoint_auth_methods_supported?.includes(method) ===
+          true
+        )
+      },
+    },
+    supportsAuthorizationSigningAlgorithm: {
+      __proto__: null,
+      value(algorithm: string) {
+        return (
+          metadata.authorization_signing_alg_values_supported?.includes(
+            algorithm,
+          ) === true
+        )
+      },
+    },
+    supportsUserInfoSigningAlgorithm: {
+      __proto__: null,
+      value(algorithm: string) {
+        return (
+          metadata.userinfo_signing_alg_values_supported?.includes(
+            algorithm,
+          ) === true
         )
       },
     },
@@ -2506,7 +2596,10 @@ export async function pollDeviceAuthorizationGrant(
     .catch(errorHandler)
     .finally(requestSignal.cleanup)
 
-  if (response.status === 503 && response.headers.has('retry-after')) {
+  if (
+    (response.status === 429 || response.status === 503) &&
+    response.headers.has('retry-after')
+  ) {
     await handleRetryAfter(response, interval, pollingSignal, true)
     await response.body?.cancel()
     return retryPoll('service_unavailable')
@@ -2804,7 +2897,10 @@ export async function pollBackchannelAuthenticationGrant(
     .catch(errorHandler)
     .finally(requestSignal.cleanup)
 
-  if (response.status === 503 && response.headers.has('retry-after')) {
+  if (
+    (response.status === 429 || response.status === 503) &&
+    response.headers.has('retry-after')
+  ) {
     await handleRetryAfter(response, interval, pollingSignal, true)
     await response.body?.cancel()
     return retryPoll('service_unavailable')
