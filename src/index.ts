@@ -1,5 +1,4 @@
 import * as oauth from 'oauth4webapi'
-import { compactDecrypt } from 'jose/jwe/compact/decrypt'
 import { JOSEError } from 'jose/errors'
 
 let headers: Record<string, string>
@@ -43,6 +42,17 @@ interface Internal {
   implicit?: boolean
   serverMetadataCache?: Readonly<ServerMetadata> & ServerMetadataHelpers
   clientMetadataCache?: Readonly<oauth.OmitSymbolProperties<ClientMetadata>>
+  mobileProfile?: Readonly<MobileConservativeProfile>
+}
+
+interface MobileConservativeProfile {
+  timeoutSeconds: number
+  refreshThresholdSeconds: number
+  refreshJitterSeconds: number
+  pollMinIntervalSeconds: number
+  pollMaxIntervalSeconds: number
+  pollBackoffMultiplier: number
+  pollJitterRatio: number
 }
 
 const int = (config: Configuration) => {
@@ -853,6 +863,7 @@ export interface ServerMetadata extends oauth.AuthorizationServer {}
 
 const ERR_INVALID_ARG_VALUE = 'ERR_INVALID_ARG_VALUE'
 const ERR_INVALID_ARG_TYPE = 'ERR_INVALID_ARG_TYPE'
+const DIGITS_ONLY = /^\d+$/
 
 type codes = typeof ERR_INVALID_ARG_VALUE | typeof ERR_INVALID_ARG_TYPE
 
@@ -1682,6 +1693,8 @@ async function decrypt(
   contentEncryptionAlgorithms: string[],
   keyManagementAlgorithms: string[],
 ): Promise<string> {
+  const { compactDecrypt } = await import('jose/jwe/compact/decrypt')
+
   return decoder.decode(
     (
       await compactDecrypt(
@@ -1710,6 +1723,45 @@ export interface ServerMetadataHelpers {
    * @param method Code Challenge Method. Default is `S256`
    */
   supportsPKCE(method?: string): boolean
+  /**
+   * Determines whether the Authorization Server supports a given grant type.
+   *
+   * @param grantType Grant type
+   */
+  supportsGrantType(grantType: string): boolean
+  /**
+   * Determines whether the Authorization Server supports a given response type.
+   *
+   * @param responseType Response type
+   */
+  supportsResponseType(responseType: string): boolean
+  /**
+   * Determines whether the Authorization Server supports a given response mode.
+   *
+   * @param responseMode Response mode
+   */
+  supportsResponseMode(responseMode: string): boolean
+  /**
+   * Determines whether the Authorization Server supports a given token endpoint
+   * client authentication method.
+   *
+   * @param method Token endpoint client authentication method
+   */
+  supportsTokenEndpointAuthMethod(method: string): boolean
+  /**
+   * Determines whether the Authorization Server supports a given authorization
+   * response signing algorithm.
+   *
+   * @param algorithm JSON Web Signature algorithm
+   */
+  supportsAuthorizationSigningAlgorithm(algorithm: string): boolean
+  /**
+   * Determines whether the Authorization Server supports a given UserInfo
+   * response signing algorithm.
+   *
+   * @param algorithm JSON Web Signature algorithm
+   */
+  supportsUserInfoSigningAlgorithm(algorithm: string): boolean
 }
 
 function getServerHelpers(metadata: Readonly<ServerMetadata>) {
@@ -1719,6 +1771,57 @@ function getServerHelpers(metadata: Readonly<ServerMetadata>) {
       value(method = 'S256') {
         return (
           metadata.code_challenge_methods_supported?.includes(method) === true
+        )
+      },
+    },
+    supportsGrantType: {
+      __proto__: null,
+      value(grantType: string) {
+        return metadata.grant_types_supported?.includes(grantType) === true
+      },
+    },
+    supportsResponseType: {
+      __proto__: null,
+      value(responseType: string) {
+        return (
+          metadata.response_types_supported?.includes(responseType) === true
+        )
+      },
+    },
+    supportsResponseMode: {
+      __proto__: null,
+      value(responseMode: string) {
+        return (
+          metadata.response_modes_supported?.includes(responseMode) === true
+        )
+      },
+    },
+    supportsTokenEndpointAuthMethod: {
+      __proto__: null,
+      value(method: string) {
+        return (
+          metadata.token_endpoint_auth_methods_supported?.includes(method) ===
+          true
+        )
+      },
+    },
+    supportsAuthorizationSigningAlgorithm: {
+      __proto__: null,
+      value(algorithm: string) {
+        return (
+          metadata.authorization_signing_alg_values_supported?.includes(
+            algorithm,
+          ) === true
+        )
+      },
+    },
+    supportsUserInfoSigningAlgorithm: {
+      __proto__: null,
+      value(algorithm: string) {
+        return (
+          metadata.userinfo_signing_alg_values_supported?.includes(
+            algorithm,
+          ) === true
         )
       },
     },
@@ -2106,6 +2209,55 @@ export interface DeviceAuthorizationGrantPollOptions extends DPoPOptions {
    * {@link initiateDeviceAuthorization}
    */
   signal?: AbortSignal
+
+  /**
+   * Enables adaptive poll interval backoff. When enabled, the next poll
+   * interval increases after retry-worthy responses such as
+   * `authorization_pending`, `slow_down`, and `503` responses.
+   */
+  adaptivePolling?: boolean
+
+  /**
+   * Lower bound in seconds for adaptive polling interval.
+   */
+  minIntervalSeconds?: number
+
+  /**
+   * Upper bound in seconds for adaptive polling interval.
+   */
+  maxIntervalSeconds?: number
+
+  /**
+   * Multiplicative step for adaptive polling interval updates.
+   */
+  backoffMultiplier?: number
+
+  /**
+   * Jitter ratio applied to adaptive polling intervals to reduce synchronized
+   * poll bursts. Use values between `0` and `1`.
+   */
+  jitterRatio?: number
+
+  /**
+   * Called when polling decides the next retry interval.
+   */
+  onRetry?: (event: PollRetryEvent) => void
+}
+
+/**
+ * Poll retry event details for Device and Backchannel polling.
+ *
+ * @group Grants
+ */
+export interface PollRetryEvent {
+  grantType: 'device_authorization' | 'backchannel_authentication'
+  reason:
+    | 'service_unavailable'
+    | 'authorization_pending'
+    | 'slow_down'
+    | 'retryable_error'
+  previousIntervalSeconds: number
+  nextIntervalSeconds: number
 }
 
 /**
@@ -2124,7 +2276,7 @@ async function handleRetryAfter(
   if (retryAfter === undefined) return
 
   let delaySeconds: number | undefined
-  if (/^\d+$/.test(retryAfter)) {
+  if (DIGITS_ONLY.test(retryAfter)) {
     delaySeconds = parseInt(retryAfter, 10)
   } else {
     const retryDate = new Date(retryAfter)
@@ -2196,6 +2348,99 @@ function wait(duration: number, signal: AbortSignal): Promise<void> {
 
     waitStep(duration)
   })
+}
+
+interface PollCadence {
+  adaptive: boolean
+  minIntervalSeconds: number
+  maxIntervalSeconds: number
+  backoffMultiplier: number
+  jitterRatio: number
+}
+
+function applyJitter(seconds: number, jitterRatio: number): number {
+  if (jitterRatio <= 0) return seconds
+  const delta = seconds * jitterRatio * (Math.random() * 2 - 1)
+  return Math.max(0, seconds + delta)
+}
+
+function resolvePollCadence(
+  options:
+    | DeviceAuthorizationGrantPollOptions
+    | BackchannelAuthenticationGrantPollOptions
+    | undefined,
+  profile: Readonly<MobileConservativeProfile> | undefined,
+  interval: number,
+): PollCadence {
+  const adaptive = options?.adaptivePolling ?? profile !== undefined
+  const minIntervalSeconds =
+    options?.minIntervalSeconds ?? profile?.pollMinIntervalSeconds ?? interval
+  const maxIntervalSeconds =
+    options?.maxIntervalSeconds ?? profile?.pollMaxIntervalSeconds ?? Infinity
+  const backoffMultiplier =
+    options?.backoffMultiplier ?? profile?.pollBackoffMultiplier ?? 1
+  const jitterRatio = options?.jitterRatio ?? profile?.pollJitterRatio ?? 0
+
+  if (!Number.isFinite(minIntervalSeconds) || minIntervalSeconds < 0) {
+    throw CodedTypeError(
+      '"options.minIntervalSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (
+    maxIntervalSeconds !== Infinity &&
+    (!Number.isFinite(maxIntervalSeconds) || maxIntervalSeconds < 0)
+  ) {
+    throw CodedTypeError(
+      '"options.maxIntervalSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (maxIntervalSeconds < minIntervalSeconds) {
+    throw CodedTypeError(
+      '"options.maxIntervalSeconds" must be greater than or equal to "options.minIntervalSeconds"',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (!Number.isFinite(backoffMultiplier) || backoffMultiplier < 1) {
+    throw CodedTypeError(
+      '"options.backoffMultiplier" must be a finite number greater than or equal to 1',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (!Number.isFinite(jitterRatio) || jitterRatio < 0 || jitterRatio > 1) {
+    throw CodedTypeError(
+      '"options.jitterRatio" must be a finite number between 0 and 1',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+
+  return {
+    adaptive,
+    minIntervalSeconds,
+    maxIntervalSeconds,
+    backoffMultiplier,
+    jitterRatio,
+  }
+}
+
+function nextAdaptivePollInterval(
+  interval: number,
+  cadence: PollCadence,
+  reason: PollRetryEvent['reason'],
+): number {
+  if (!cadence.adaptive) return interval
+
+  let next = interval * cadence.backoffMultiplier
+  if (reason === 'slow_down') {
+    next = Math.max(next, interval + 5)
+  }
+
+  next = Math.max(cadence.minIntervalSeconds, next)
+  next = Math.min(cadence.maxIntervalSeconds, next)
+  next = applyJitter(next, cadence.jitterRatio)
+
+  return next
 }
 
 function pollRequestSignal(
@@ -2295,15 +2540,33 @@ export async function pollDeviceAuthorizationGrant(
     errorHandler(err)
   }
 
-  const { as, c, auth, fetch, tlsOnly, nonRepudiation, timeout, decrypt } =
-    int(config)
+  const {
+    as,
+    c,
+    auth,
+    fetch,
+    tlsOnly,
+    nonRepudiation,
+    timeout,
+    decrypt,
+    mobileProfile,
+  } = int(config)
 
-  const retryPoll = (updatedInterval: number, flag?: typeof retry) =>
-    pollDeviceAuthorizationGrant(
+  const cadence = resolvePollCadence(options, mobileProfile, interval)
+  const retryPoll = (reason: PollRetryEvent['reason'], flag?: typeof retry) => {
+    const previousIntervalSeconds = interval
+    interval = nextAdaptivePollInterval(interval, cadence, reason)
+    options?.onRetry?.({
+      grantType: 'device_authorization',
+      reason,
+      previousIntervalSeconds,
+      nextIntervalSeconds: interval,
+    })
+    return pollDeviceAuthorizationGrant(
       config,
       {
         ...deviceAuthorizationResponse,
-        interval: updatedInterval,
+        interval,
       },
       parameters,
       {
@@ -2312,6 +2575,7 @@ export async function pollDeviceAuthorizationGrant(
         flag,
       },
     )
+  }
 
   const requestSignal = pollRequestSignal(pollingSignal, timeout)
   const response = await oauth
@@ -2332,10 +2596,13 @@ export async function pollDeviceAuthorizationGrant(
     .catch(errorHandler)
     .finally(requestSignal.cleanup)
 
-  if (response.status === 503 && response.headers.has('retry-after')) {
+  if (
+    (response.status === 429 || response.status === 503) &&
+    response.headers.has('retry-after')
+  ) {
     await handleRetryAfter(response, interval, pollingSignal, true)
     await response.body?.cancel()
-    return retryPoll(interval)
+    return retryPoll('service_unavailable')
   }
 
   const p = oauth.processDeviceCodeResponse(as, c, response, {
@@ -2347,17 +2614,19 @@ export async function pollDeviceAuthorizationGrant(
     result = await p
   } catch (err) {
     if (retryable(err, options)) {
-      return retryPoll(interval, retry)
+      return retryPoll('retryable_error', retry)
     }
 
     if (err instanceof oauth.ResponseBodyError) {
       switch (err.error) {
         // @ts-ignore
-        case 'slow_down': // Fall through
+        case 'slow_down':
           interval += 5
+          await handleRetryAfter(err.response, interval, pollingSignal)
+          return retryPoll('slow_down')
         case 'authorization_pending':
           await handleRetryAfter(err.response, interval, pollingSignal)
-          return retryPoll(interval)
+          return retryPoll('authorization_pending')
       }
     }
 
@@ -2474,6 +2743,39 @@ export interface BackchannelAuthenticationGrantPollOptions extends DPoPOptions {
    * {@link initiateBackchannelAuthentication}
    */
   signal?: AbortSignal
+
+  /**
+   * Enables adaptive poll interval backoff. When enabled, the next poll
+   * interval increases after retry-worthy responses such as
+   * `authorization_pending`, `slow_down`, and `503` responses.
+   */
+  adaptivePolling?: boolean
+
+  /**
+   * Lower bound in seconds for adaptive polling interval.
+   */
+  minIntervalSeconds?: number
+
+  /**
+   * Upper bound in seconds for adaptive polling interval.
+   */
+  maxIntervalSeconds?: number
+
+  /**
+   * Multiplicative step for adaptive polling interval updates.
+   */
+  backoffMultiplier?: number
+
+  /**
+   * Jitter ratio applied to adaptive polling intervals to reduce synchronized
+   * poll bursts. Use values between `0` and `1`.
+   */
+  jitterRatio?: number
+
+  /**
+   * Called when polling decides the next retry interval.
+   */
+  onRetry?: (event: PollRetryEvent) => void
 }
 
 /**
@@ -2539,15 +2841,33 @@ export async function pollBackchannelAuthenticationGrant(
     errorHandler(err)
   }
 
-  const { as, c, auth, fetch, tlsOnly, nonRepudiation, timeout, decrypt } =
-    int(config)
+  const {
+    as,
+    c,
+    auth,
+    fetch,
+    tlsOnly,
+    nonRepudiation,
+    timeout,
+    decrypt,
+    mobileProfile,
+  } = int(config)
 
-  const retryPoll = (updatedInterval: number, flag?: typeof retry) =>
-    pollBackchannelAuthenticationGrant(
+  const cadence = resolvePollCadence(options, mobileProfile, interval)
+  const retryPoll = (reason: PollRetryEvent['reason'], flag?: typeof retry) => {
+    const previousIntervalSeconds = interval
+    interval = nextAdaptivePollInterval(interval, cadence, reason)
+    options?.onRetry?.({
+      grantType: 'backchannel_authentication',
+      reason,
+      previousIntervalSeconds,
+      nextIntervalSeconds: interval,
+    })
+    return pollBackchannelAuthenticationGrant(
       config,
       {
         ...backchannelAuthenticationResponse,
-        interval: updatedInterval,
+        interval,
       },
       parameters,
       {
@@ -2556,6 +2876,7 @@ export async function pollBackchannelAuthenticationGrant(
         flag,
       },
     )
+  }
 
   const requestSignal = pollRequestSignal(pollingSignal, timeout)
   const response = await oauth
@@ -2576,10 +2897,13 @@ export async function pollBackchannelAuthenticationGrant(
     .catch(errorHandler)
     .finally(requestSignal.cleanup)
 
-  if (response.status === 503 && response.headers.has('retry-after')) {
+  if (
+    (response.status === 429 || response.status === 503) &&
+    response.headers.has('retry-after')
+  ) {
     await handleRetryAfter(response, interval, pollingSignal, true)
     await response.body?.cancel()
-    return retryPoll(interval)
+    return retryPoll('service_unavailable')
   }
 
   const p = oauth.processBackchannelAuthenticationGrantResponse(
@@ -2596,17 +2920,19 @@ export async function pollBackchannelAuthenticationGrant(
     result = await p
   } catch (err) {
     if (retryable(err, options)) {
-      return retryPoll(interval, retry)
+      return retryPoll('retryable_error', retry)
     }
 
     if (err instanceof oauth.ResponseBodyError) {
       switch (err.error) {
         // @ts-ignore
-        case 'slow_down': // Fall through
+        case 'slow_down':
           interval += 5
+          await handleRetryAfter(err.response, interval, pollingSignal)
+          return retryPoll('slow_down')
         case 'authorization_pending':
           await handleRetryAfter(err.response, interval, pollingSignal)
-          return retryPoll(interval)
+          return retryPoll('authorization_pending')
       }
     }
 
@@ -2743,7 +3069,144 @@ export function getJwksCache(
 }
 
 /**
+ * Mobile-conservative runtime profile options.
+ *
+ * @group Advanced Configuration
+ */
+export interface MobileConservativeProfileOptions {
+  /**
+   * Timeout (in seconds) applied to outgoing HTTP requests.
+   */
+  timeoutSeconds?: number
+  /**
+   * Default proactive refresh threshold in seconds.
+   */
+  refreshThresholdSeconds?: number
+  /**
+   * Randomized threshold offset (seconds) used to reduce synchronized
+   * refreshes.
+   */
+  refreshJitterSeconds?: number
+  /**
+   * Minimum poll interval in seconds for adaptive grant polling.
+   */
+  pollMinIntervalSeconds?: number
+  /**
+   * Maximum poll interval in seconds for adaptive grant polling.
+   */
+  pollMaxIntervalSeconds?: number
+  /**
+   * Multiplicative backoff factor for adaptive grant polling.
+   */
+  pollBackoffMultiplier?: number
+  /**
+   * Jitter ratio for adaptive grant polling between `0` and `1`.
+   */
+  pollJitterRatio?: number
+}
+
+/**
+ * Enables a mobile-conservative runtime profile optimized for constrained
+ * devices and unstable networks.
+ *
+ * @group Advanced Configuration
+ */
+export function enableMobileConservativeProfile(
+  config: Configuration,
+  options?: MobileConservativeProfileOptions,
+): Readonly<MobileConservativeProfile> {
+  checkConfig(config)
+
+  const timeoutSeconds = options?.timeoutSeconds ?? 15
+  const refreshThresholdSeconds = options?.refreshThresholdSeconds ?? 20
+  const refreshJitterSeconds = options?.refreshJitterSeconds ?? 5
+  const pollMinIntervalSeconds = options?.pollMinIntervalSeconds ?? 2
+  const pollMaxIntervalSeconds = options?.pollMaxIntervalSeconds ?? 30
+  const pollBackoffMultiplier = options?.pollBackoffMultiplier ?? 1.5
+  const pollJitterRatio = options?.pollJitterRatio ?? 0.1
+
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw CodedTypeError(
+      '"options.timeoutSeconds" must be a finite number greater than 0',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (
+    !Number.isFinite(refreshThresholdSeconds) ||
+    refreshThresholdSeconds < 0
+  ) {
+    throw CodedTypeError(
+      '"options.refreshThresholdSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (!Number.isFinite(refreshJitterSeconds) || refreshJitterSeconds < 0) {
+    throw CodedTypeError(
+      '"options.refreshJitterSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (!Number.isFinite(pollMinIntervalSeconds) || pollMinIntervalSeconds < 0) {
+    throw CodedTypeError(
+      '"options.pollMinIntervalSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (!Number.isFinite(pollMaxIntervalSeconds) || pollMaxIntervalSeconds < 0) {
+    throw CodedTypeError(
+      '"options.pollMaxIntervalSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (pollMaxIntervalSeconds < pollMinIntervalSeconds) {
+    throw CodedTypeError(
+      '"options.pollMaxIntervalSeconds" must be greater than or equal to "options.pollMinIntervalSeconds"',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (!Number.isFinite(pollBackoffMultiplier) || pollBackoffMultiplier < 1) {
+    throw CodedTypeError(
+      '"options.pollBackoffMultiplier" must be a finite number greater than or equal to 1',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  if (
+    !Number.isFinite(pollJitterRatio) ||
+    pollJitterRatio < 0 ||
+    pollJitterRatio > 1
+  ) {
+    throw CodedTypeError(
+      '"options.pollJitterRatio" must be a finite number between 0 and 1',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+
+  const profile = Object.freeze({
+    timeoutSeconds,
+    refreshThresholdSeconds,
+    refreshJitterSeconds,
+    pollMinIntervalSeconds,
+    pollMaxIntervalSeconds,
+    pollBackoffMultiplier,
+    pollJitterRatio,
+  })
+
+  const internals = int(config)
+  internals.timeout = timeoutSeconds
+  internals.mobileProfile = profile
+
+  return profile
+}
+
+/**
  * Telemetry event handlers passed to {@link enableTelemetry}.
+ *
+ * > [!WARNING]\
+ * > The `options` argument passed to each callback is the raw
+ * > {@link CustomFetchOptions} object forwarded to the underlying fetch
+ * > implementation. It may contain sensitive values such as `Authorization`,
+ * > `DPoP-Proof`, or other credential headers. Do **not** log the options object
+ * > as-is in production; extract only the fields you need.
  *
  * @group Advanced Configuration
  */
@@ -2776,6 +3239,174 @@ export interface TelemetryCallbacks {
     options: Readonly<CustomFetchOptions>,
     error: unknown,
   ) => void
+}
+
+/**
+ * Refresh event details emitted by
+ * {@link fetchProtectedResourceWithAutoRefresh}.
+ *
+ * @group Token Management
+ */
+export interface RefreshEvent {
+  mode: 'proactive' | 'reactive'
+  outcome: 'success' | 'error'
+  deduplicated: boolean
+}
+
+/**
+ * Challenge event details emitted by
+ * {@link fetchProtectedResourceWithAutoRefresh}.
+ *
+ * @group Protected Resource Requests
+ */
+export interface ChallengeEvent {
+  retriable: boolean
+  scheme: 'bearer_or_dpop' | 'other'
+}
+
+/**
+ * Snapshot returned by {@link MobileDiagnosticsCollector.snapshot}.
+ *
+ * @group Advanced Configuration
+ */
+export interface MobileDiagnosticsSnapshot {
+  requests: number
+  responses: number
+  networkErrors: number
+  totalRequestDurationMs: number
+  averageRequestDurationMs: number
+  pollRetries: Record<PollRetryEvent['reason'], number>
+  refresh: {
+    proactiveSuccess: number
+    proactiveError: number
+    reactiveSuccess: number
+    reactiveError: number
+  }
+  challenges: {
+    retriable: number
+    other: number
+  }
+}
+
+/**
+ * Diagnostics collector that can be passed into {@link enableTelemetry},
+ * {@link pollDeviceAuthorizationGrant},
+ * {@link pollBackchannelAuthenticationGrant}, and
+ * {@link fetchProtectedResourceWithAutoRefresh}.
+ *
+ * @group Advanced Configuration
+ */
+export interface MobileDiagnosticsCollector extends TelemetryCallbacks {
+  recordPollRetry(event: PollRetryEvent): void
+  recordRefresh(event: RefreshEvent): void
+  recordChallenge(event: ChallengeEvent): void
+  snapshot(): MobileDiagnosticsSnapshot
+  reset(): void
+}
+
+/**
+ * Creates a reusable diagnostics collector for grant polling and token refresh
+ * behavior.
+ *
+ * @group Advanced Configuration
+ */
+export function createMobileDiagnosticsCollector(): MobileDiagnosticsCollector {
+  const state = {
+    requests: 0,
+    responses: 0,
+    networkErrors: 0,
+    totalRequestDurationMs: 0,
+    pollRetries: {
+      service_unavailable: 0,
+      authorization_pending: 0,
+      slow_down: 0,
+      retryable_error: 0,
+    } as Record<PollRetryEvent['reason'], number>,
+    refresh: {
+      proactiveSuccess: 0,
+      proactiveError: 0,
+      reactiveSuccess: 0,
+      reactiveError: 0,
+    },
+    challenges: {
+      retriable: 0,
+      other: 0,
+    },
+  }
+
+  const collector: MobileDiagnosticsCollector = {
+    onRequest() {
+      state.requests++
+    },
+    onResponse(_url, _options, _response, durationMs) {
+      state.responses++
+      state.totalRequestDurationMs += durationMs
+    },
+    onError() {
+      state.networkErrors++
+    },
+    recordPollRetry(event) {
+      state.pollRetries[event.reason]++
+    },
+    recordRefresh(event) {
+      if (event.mode === 'proactive') {
+        if (event.outcome === 'success') {
+          state.refresh.proactiveSuccess++
+        } else {
+          state.refresh.proactiveError++
+        }
+      } else if (event.outcome === 'success') {
+        state.refresh.reactiveSuccess++
+      } else {
+        state.refresh.reactiveError++
+      }
+    },
+    recordChallenge(event) {
+      if (event.retriable) {
+        state.challenges.retriable++
+      } else {
+        state.challenges.other++
+      }
+    },
+    snapshot() {
+      const averageRequestDurationMs =
+        state.responses > 0 ? state.totalRequestDurationMs / state.responses : 0
+      return {
+        requests: state.requests,
+        responses: state.responses,
+        networkErrors: state.networkErrors,
+        totalRequestDurationMs: state.totalRequestDurationMs,
+        averageRequestDurationMs,
+        pollRetries: {
+          ...state.pollRetries,
+        },
+        refresh: {
+          ...state.refresh,
+        },
+        challenges: {
+          ...state.challenges,
+        },
+      }
+    },
+    reset() {
+      state.requests = 0
+      state.responses = 0
+      state.networkErrors = 0
+      state.totalRequestDurationMs = 0
+      state.pollRetries.service_unavailable = 0
+      state.pollRetries.authorization_pending = 0
+      state.pollRetries.slow_down = 0
+      state.pollRetries.retryable_error = 0
+      state.refresh.proactiveSuccess = 0
+      state.refresh.proactiveError = 0
+      state.refresh.reactiveSuccess = 0
+      state.refresh.reactiveError = 0
+      state.challenges.retriable = 0
+      state.challenges.other = 0
+    },
+  }
+
+  return collector
 }
 
 /**
@@ -4328,11 +4959,11 @@ export async function fetchUserInfo(
 }
 
 function retryable(err: unknown, options: DPoPOptions | undefined) {
-  if (options?.DPoP && options.flag !== retry) {
-    return oauth.isDPoPNonceError(err)
+  if (!options || !options.DPoP || options.flag === retry) {
+    return false
   }
 
-  return false
+  return oauth.isDPoPNonceError(err)
 }
 
 /**
@@ -4390,6 +5021,16 @@ export async function tokenIntrospection(
 }
 
 const retry: unique symbol = Symbol()
+const TOKEN_EXCHANGE_KNOWN_PARAMS = new Set([
+  'subject_token',
+  'subject_token_type',
+  'actor_token',
+  'actor_token_type',
+  'requested_token_type',
+  'audience',
+  'resource',
+  'scope',
+])
 export interface DPoPOptions {
   /**
    * DPoP handle to use for requesting a sender-constrained access token.
@@ -4664,18 +5305,8 @@ export async function tokenExchangeGrant(
     params.set('resource', parameters.resource)
   if (parameters.scope !== undefined) params.set('scope', parameters.scope)
 
-  const knownParams = new Set([
-    'subject_token',
-    'subject_token_type',
-    'actor_token',
-    'actor_token_type',
-    'requested_token_type',
-    'audience',
-    'resource',
-    'scope',
-  ])
   for (const [key, value] of Object.entries(parameters)) {
-    if (!knownParams.has(key) && value !== undefined) {
+    if (!TOKEN_EXCHANGE_KNOWN_PARAMS.has(key) && value !== undefined) {
       params.set(key, value)
     }
   }
@@ -4815,9 +5446,38 @@ export interface FetchProtectedResourceAutoRefreshOptions extends DPoPOptions {
   /**
    * Number of seconds before the access token expiry at which a proactive token
    * refresh is attempted before making the protected resource request. Default
-   * is `30` seconds.
+   * is `30` seconds. Must be a finite non-negative number.
    */
   refreshThresholdSeconds?: number
+
+  /**
+   * Randomized threshold offset (seconds) subtracted from the proactive refresh
+   * threshold to reduce synchronized refresh bursts across clients.
+   */
+  refreshJitterSeconds?: number
+
+  /**
+   * When `true`, non-idempotent HTTP methods (such as `POST` and `PATCH`) are
+   * eligible for retry after a reactive refresh, provided the request body is
+   * also replayable (i.e. not a {@link !ReadableStream}). Only enable this when
+   * the operation is guaranteed safe to repeat.
+   *
+   * By default only safe-and-idempotent methods (GET, HEAD, OPTIONS, TRACE) are
+   * retried.
+   *
+   * Default is `false`.
+   */
+  retryNonIdempotentRequests?: boolean
+
+  /**
+   * Called when a proactive or reactive refresh attempt completes.
+   */
+  onRefresh?: (event: RefreshEvent) => void
+
+  /**
+   * Called when a `401` challenge is evaluated for reactive refresh.
+   */
+  onChallenge?: (event: ChallengeEvent) => void
 }
 
 /**
@@ -4838,6 +5498,90 @@ export interface ProtectedResourceResponse {
    * as `tokens`.
    */
   tokens: oauth.TokenEndpointResponse & TokenEndpointResponseHelpers
+
+  /**
+   * Set when a reactive Refresh Token Grant was attempted after a `401`
+   * response from the resource server but the grant itself failed. In this case
+   * `response` is the original `401` and `tokens` is unchanged. Inspect this
+   * field to distinguish "the resource server refused with 401" from "the token
+   * refresh failed".
+   */
+  refreshError?: unknown
+}
+
+function isReadableStream(body: FetchBody | undefined): body is ReadableStream {
+  return (
+    typeof body === 'object' &&
+    body !== null &&
+    'getReader' in body &&
+    typeof body.getReader === 'function'
+  )
+}
+
+// HTTP methods that are safe to replay by default after a reactive refresh
+// (RFC 7231 safe methods).  PUT and DELETE are idempotent but side-effectful;
+// POST and PATCH are neither — callers must opt-in via retryNonIdempotentRequests.
+const SAFE_REPLAY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE'])
+
+function isSafeReplayMethod(method: string): boolean {
+  return SAFE_REPLAY_METHODS.has(method.toUpperCase())
+}
+
+// Returns true when the 401 WWW-Authenticate challenge is for the Bearer (RFC
+// 6750) or DPoP (RFC 9449) scheme, indicating the access token itself is the
+// reason for rejection. Challenges for other schemes (Basic, Digest, …) and
+// Bearer/DPoP challenges with error "insufficient_scope" or "invalid_request"
+// are excluded because a refreshed token cannot fix them.
+function isBearerOrDPoPChallenge(response: Response): boolean {
+  const www = response.headers.get('www-authenticate')
+  if (!www) return false
+  if (!/(?:^|,)\s*(?:Bearer|DPoP)\b/i.test(www)) return false
+  const m = www.match(/\berror\s*=\s*"([^"]+)"/i)
+  if (m) {
+    const code = m[1].toLowerCase()
+    if (code === 'insufficient_scope' || code === 'invalid_request') {
+      return false
+    }
+  }
+  return true
+}
+
+// Per-Configuration in-flight refresh deduplication.  Entries are evicted when
+// the promise settles so this does not permanently cache tokens.
+const inflightRefreshes = new WeakMap<
+  Configuration,
+  Map<
+    string,
+    Promise<oauth.TokenEndpointResponse & TokenEndpointResponseHelpers>
+  >
+>()
+
+function deduplicateRefresh(
+  config: Configuration,
+  refreshToken: string,
+  create: () => Promise<
+    oauth.TokenEndpointResponse & TokenEndpointResponseHelpers
+  >,
+): Promise<oauth.TokenEndpointResponse & TokenEndpointResponseHelpers> {
+  let map = inflightRefreshes.get(config)
+  if (!map) {
+    map = new Map()
+    inflightRefreshes.set(config, map)
+  }
+  const existing = map.get(refreshToken)
+  if (existing) return existing
+  const promise = create().finally(() => {
+    map!.delete(refreshToken)
+  })
+  map.set(refreshToken, promise)
+  return promise
+}
+
+function hasInflightRefresh(
+  config: Configuration,
+  refreshToken: string,
+): boolean {
+  return inflightRefreshes.get(config)?.has(refreshToken) === true
 }
 
 /**
@@ -4850,12 +5594,15 @@ export interface ProtectedResourceResponse {
  * 1. **Proactive refresh** — Before issuing the resource request, if the access
  *    token expires within `refreshThresholdSeconds` (default: `30`) _and_ a
  *    `refresh_token` is present in `tokens`, a Refresh Token Grant is performed
- *    first.
- * 2. **Reactive refresh** — If the resource server responds with HTTP `401` _and_
- *    a `refresh_token` is present in the current token set, a Refresh Token
- *    Grant is attempted and the request is retried with the new access token.
- *    When the reactive refresh itself fails, the `401` response is returned to
- *    the caller as-is.
+ *    first. Concurrent calls with the same refresh token are deduplicated —
+ *    only one token endpoint request is made regardless of how many callers
+ *    race.
+ * 2. **Reactive refresh** — If the resource server responds with HTTP `401` that
+ *    carries a `Bearer` or `DPoP` `WWW-Authenticate` challenge (RFC 6750 / RFC
+ *    9449) _and_ a `refresh_token` is present in the current token set, a
+ *    Refresh Token Grant is attempted and the request is retried once. When the
+ *    reactive refresh itself fails, the `401` response and the refresh error
+ *    are both surfaced in the return value via the `refreshError` field.
  *
  * > [!NOTE]\
  * > Always persist the `tokens` value returned by this function in your session
@@ -4867,6 +5614,16 @@ export interface ProtectedResourceResponse {
  * > after a reactive refresh is not possible because the stream has already been
  * > consumed. Pass the body as a `string`, {@link !URLSearchParams}, or
  * > `Uint8Array` when reactive refresh is desired.
+ *
+ * > [!NOTE]\
+ * > Reactive refresh is only attempted for safe-and-idempotent HTTP methods (GET,
+ * > HEAD, OPTIONS, TRACE) by default. To retry POST/PATCH or other non-idempotent
+ * > methods set `options.retryNonIdempotentRequests` to `true`, and only do so
+ * > when the body is replayable and the operation is safe to repeat.
+ *
+ * > [!NOTE]\
+ * > When the authorization server omits a new `refresh_token` from the grant
+ * > response, the existing refresh token is carried forward per RFC 6749 §6.
  *
  * > [!NOTE]\
  * > {@link ServerMetadata.token_endpoint URL of the authorization server's token endpoint}
@@ -4882,16 +5639,24 @@ export interface ProtectedResourceResponse {
  *   t: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers,
  * ) => void
  *
- * let { response, tokens: currentTokens } =
- *   await client.fetchProtectedResourceWithAutoRefresh(
- *     config,
- *     tokens,
- *     new URL('https://rs.example.com/api'),
- *     'GET',
- *   )
+ * let {
+ *   response,
+ *   tokens: currentTokens,
+ *   refreshError,
+ * } = await client.fetchProtectedResourceWithAutoRefresh(
+ *   config,
+ *   tokens,
+ *   new URL('https://rs.example.com/api'),
+ *   'GET',
+ * )
  *
  * // Always persist the returned tokens — they may have been refreshed
  * saveTokens(currentTokens)
+ *
+ * if (refreshError) {
+ *   // A reactive refresh was attempted but failed; currentTokens is unchanged.
+ *   console.error('Token refresh failed', refreshError)
+ * }
  *
  * console.log('Protected Resource Response', await response.json())
  * ```
@@ -4916,55 +5681,163 @@ export async function fetchProtectedResourceWithAutoRefresh(
   options?: FetchProtectedResourceAutoRefreshOptions,
 ): Promise<ProtectedResourceResponse> {
   checkConfig(config)
+  const { mobileProfile } = int(config)
 
-  const threshold = options?.refreshThresholdSeconds ?? 30
+  const thresholdInput = options?.refreshThresholdSeconds
+  if (thresholdInput !== undefined) {
+    if (
+      typeof thresholdInput !== 'number' ||
+      !Number.isFinite(thresholdInput) ||
+      thresholdInput < 0
+    ) {
+      throw CodedTypeError(
+        '"options.refreshThresholdSeconds" must be a finite non-negative number',
+        ERR_INVALID_ARG_VALUE,
+      )
+    }
+  }
+  const threshold =
+    thresholdInput ?? mobileProfile?.refreshThresholdSeconds ?? 30
+  const refreshJitterSeconds =
+    options?.refreshJitterSeconds ?? mobileProfile?.refreshJitterSeconds ?? 0
+  if (!Number.isFinite(refreshJitterSeconds) || refreshJitterSeconds < 0) {
+    throw CodedTypeError(
+      '"options.refreshJitterSeconds" must be a finite non-negative number',
+      ERR_INVALID_ARG_VALUE,
+    )
+  }
+  const proactiveThreshold = Math.max(
+    0,
+    threshold - Math.random() * refreshJitterSeconds,
+  )
 
   let currentTokens: oauth.TokenEndpointResponse &
     TokenEndpointResponseHelpers = tokens
 
   // Proactive refresh: refresh the access token before the request if it is
   // expiring within the threshold window and a refresh token is available.
+  // Concurrent calls sharing the same refresh token are deduplicated.
   if (
     currentTokens.refresh_token !== undefined &&
-    (currentTokens.expiresIn() ?? Infinity) <= threshold
+    (currentTokens.expiresIn() ?? Infinity) <= proactiveThreshold
   ) {
-    currentTokens = await refreshTokenGrant(
-      config,
-      currentTokens.refresh_token,
-      options?.refreshParameters,
-      options,
-    )
+    const oldRefreshToken = currentTokens.refresh_token
+    const deduplicated = hasInflightRefresh(config, oldRefreshToken)
+    try {
+      currentTokens = await deduplicateRefresh(config, oldRefreshToken, () =>
+        refreshTokenGrant(
+          config,
+          oldRefreshToken,
+          options?.refreshParameters,
+          options,
+        ),
+      )
+      options?.onRefresh?.({
+        mode: 'proactive',
+        outcome: 'success',
+        deduplicated,
+      })
+    } catch (err) {
+      options?.onRefresh?.({
+        mode: 'proactive',
+        outcome: 'error',
+        deduplicated,
+      })
+      throw err
+    }
+    // RFC 6749 §6: if the server does not issue a new refresh token, carry
+    // the existing one forward.
+    if (currentTokens.refresh_token === undefined) {
+      ;(currentTokens as { refresh_token?: string }).refresh_token =
+        oldRefreshToken
+    }
   }
 
-  let response = await fetchProtectedResource(
-    config,
-    currentTokens.access_token,
-    url,
-    method,
-    body,
-    headers,
-    options,
-  )
+  // First resource request.  When the server returns HTTP 401 with a
+  // WWW-Authenticate header, oauth4webapi throws WWWAuthenticateChallengeError
+  // rather than returning the response.  We catch that error here so that the
+  // Bearer or DPoP challenge path can attempt a reactive refresh.
+  let response: Response
+  let bearerOrDPoPChallengeCaught = false
+  try {
+    response = await fetchProtectedResource(
+      config,
+      currentTokens.access_token,
+      url,
+      method,
+      body,
+      headers,
+      options,
+    )
+  } catch (err) {
+    if (err instanceof oauth.WWWAuthenticateChallengeError) {
+      const challengeResponse = err.response as Response
+      const retriable = isBearerOrDPoPChallenge(challengeResponse)
+      options?.onChallenge?.({
+        retriable,
+        scheme: retriable ? 'bearer_or_dpop' : 'other',
+      })
+      if (retriable) {
+        // Bearer or DPoP challenge — decide whether a reactive refresh can help.
+        response = challengeResponse
+        bearerOrDPoPChallengeCaught = true
+      } else {
+        // Non-token scheme (Basic, Digest, etc.) or a non-retriable error code
+        // (insufficient_scope, invalid_request) — re-throw so the caller can
+        // handle it.
+        throw err
+      }
+    } else {
+      throw err
+    }
+  }
 
-  // Reactive refresh: if the resource server returns 401 and a refresh token
-  // is available, attempt a token refresh and retry the request once.
-  if (response.status === 401 && currentTokens.refresh_token !== undefined) {
+  // Reactive refresh: only attempted when the first request resulted in a
+  // Bearer or DPoP challenge, a refresh token is present, the body is
+  // replayable, and the method is allowed to be retried.
+  if (
+    bearerOrDPoPChallengeCaught &&
+    currentTokens.refresh_token !== undefined &&
+    !isReadableStream(body) &&
+    (isSafeReplayMethod(method) || options?.retryNonIdempotentRequests === true)
+  ) {
+    const oldRefreshToken = currentTokens.refresh_token
+    const deduplicated = hasInflightRefresh(config, oldRefreshToken)
     let refreshed:
       | (oauth.TokenEndpointResponse & TokenEndpointResponseHelpers)
       | null = null
+    let refreshError: unknown
     try {
-      refreshed = await refreshTokenGrant(
-        config,
-        currentTokens.refresh_token,
-        options?.refreshParameters,
-        options,
+      refreshed = await deduplicateRefresh(config, oldRefreshToken, () =>
+        refreshTokenGrant(
+          config,
+          oldRefreshToken,
+          options?.refreshParameters,
+          options,
+        ),
       )
-    } catch {
-      // Refresh failed; return the original 401 response to the caller.
+      options?.onRefresh?.({
+        mode: 'reactive',
+        outcome: 'success',
+        deduplicated,
+      })
+    } catch (err) {
+      refreshError = err
+      options?.onRefresh?.({
+        mode: 'reactive',
+        outcome: 'error',
+        deduplicated,
+      })
     }
 
     if (refreshed !== null) {
-      await response.body?.cancel()
+      // RFC 6749 §6: carry forward the old refresh token when the server did
+      // not issue a new one.
+      if (refreshed.refresh_token === undefined) {
+        ;(refreshed as { refresh_token?: string }).refresh_token =
+          oldRefreshToken
+      }
+      // Second resource request — failures propagate to the caller.
       response = await fetchProtectedResource(
         config,
         refreshed.access_token,
@@ -4975,7 +5848,10 @@ export async function fetchProtectedResourceWithAutoRefresh(
         options,
       )
       currentTokens = refreshed
+      return { response, tokens: currentTokens }
     }
+
+    return { response, tokens: currentTokens, refreshError }
   }
 
   return { response, tokens: currentTokens }

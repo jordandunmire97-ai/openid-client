@@ -8,4 +8,7 @@ task-oriented walkthroughs.
 - [Web app login and logout](web-app-login.md)
 - [Token lifecycle and protected resource access](token-lifecycle.md)
 - [Advanced configuration recipes](advanced-configuration.md)
+- [Mobile-first runtime profile](mobile-first-runtime-profile.md)
 - [Runtime integration notes](runtime-notes.md)
+- [Error handling and troubleshooting](error-handling.md)
+- [Security best practices](security-best-practices.md)

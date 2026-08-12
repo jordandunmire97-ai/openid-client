@@ -16,6 +16,25 @@ few deployment details matter.
 - The [Passport Strategy](../../examples/passport.ts) is a good starting point
   for session-based web apps.
 
+## Measure before tuning
+
+Authentication traffic is usually network-bound, so measure discovery, token,
+JWKS, and protected-resource latency separately before changing configuration.
+Record status codes, timeout and abort errors, retry counts, and response sizes,
+but never log authorization codes, tokens, cookies, client secrets, or private
+key material.
+
+For long-lived processes, keep one `Configuration` per authorization-server
+and client combination rather than rediscovering it for every request. Reuse the
+same `customFetch` transport as well; this lets the runtime retain connection
+pools and any application-level observability without changing protocol
+behavior.
+
+Set a timeout that fits the operation's latency budget. A long timeout can
+consume resources during an outage, while a short timeout can interrupt slow
+authorization servers. Treat timeout changes as an operational setting and
+measure them under normal and degraded network conditions.
+
 ## Browsers
 
 - Store PKCE verifiers, state, and nonce values per user session.
@@ -34,6 +53,17 @@ few deployment details matter.
   restore JWKS cache data from your own storage between invocations.
 - Inject runtime-specific networking through `config[client.customFetch]` when
   platform defaults need to be wrapped.
+- Do not assume in-memory state survives between invocations. Persist only the
+  exported JWKS cache data and other non-secret metadata needed to avoid cold
+  lookups; keep tokens and private keys in protected storage.
+
+## Retry boundaries
+
+Retries should be supplied by the transport or application with an explicit
+policy. Do not blindly retry every POST: repeating authorization, token, or
+registration requests can create duplicate operations or amplify an outage.
+Honor `Retry-After` for device authorization and CIBA polling, and cap retries
+with a deadline so a request cannot outlive its caller.
 
 ## Bun and Electron
 

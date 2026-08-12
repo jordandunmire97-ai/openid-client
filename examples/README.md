@@ -20,6 +20,7 @@ A collection of examples for the most common use cases.
 - Authorization Code Flow (OpenID Connect) - [source](oidc.ts) | [diff](oidc.diff)
 - Logout - [source](logout.ts)
 - Additional Grants
+  - Protected Resource Auto-Refresh - [source](auto-refresh.ts)
   - Client Credentials - [source](client-credentials.ts)
   - Device Authorization - [source](device.ts)
   - Client-Initiated Backchannel Authentication (CIBA) - [source](ciba.ts)
@@ -32,6 +33,7 @@ A collection of examples for the most common use cases.
   - Pushed Authorization Request (PAR) - [source](par.ts) | [diff](par.diff)
 - Passport Strategy - [source](passport.ts)
 - Express.js Integration - [source](express.ts)
+- Mobile App Backend (Phone UI) - [source](mobile-backend.ts)
 - Practical Guides - [source](../docs/guides/README.md)
 
 [sponsor-auth0]: https://a0.to/signup/panva
